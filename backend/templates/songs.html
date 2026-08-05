@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Emotion Analysis & Personal Care</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+            padding: 30px 20px;
+            position: relative;
+            overflow-x: hidden;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 3em;
+            font-weight: 700;
+            text-shadow: 2px 2px 8px rgba(0,0,0,0.4);
+            letter-spacing: 2px;
+        }
+        
+        /* Emotion Analysis Section */
+        .emotion-box {
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .emotion-box h2 {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .emotion-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .captured-image {
+            width: 100%;
+            max-width: 400px;
+            border-radius: 10px;
+            margin: 0 auto 20px;
+            display: block;
+            border: 2px solid rgba(255,255,255,0.3);
+        }
+        .emotion-item {
+            background: rgba(255,255,255,0.15);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            border-left: 4px solid #4fc3f7;
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        .emotion-item:hover {
+            transform: translateY(-5px);
+            background: rgba(255,255,255,0.25);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+        }
+        .emotion-label {
+            font-size: 0.9em;
+            opacity: 0.8;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .emotion-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #4fc3f7;
+        }
+        
+        /* Quote/Joke Section */
+        .quote-box {
+            background: rgba(255,255,255,0.1);
+            border-left: 5px solid #ffd700;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 10px;
+            font-size: 1.2em;
+            font-style: italic;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            animation: slide-in 0.5s ease-out;
+        }
+        
+        /* Alert Section */
+        .alert-box {
+            background: rgba(255, 107, 107, 0.2);
+            border-left: 5px solid #ff6b6b;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-radius: 10px;
+            font-size: 1.1em;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            animation: pulse-alert 2s ease-in-out infinite;
+        }
+        @keyframes slide-in {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        @keyframes pulse-alert {
+            0%, 100% {
+                box-shadow: 0 8px 32px rgba(255, 107, 107, 0.3);
+            }
+            50% {
+                box-shadow: 0 8px 40px rgba(255, 107, 107, 0.5);
+            }
+        }
+        
+        /* Songs Section */
+        h3 {
+            text-align: center;
+            margin: 30px 0 20px;
+            font-size: 1.3em;
+        }
+        .song-box {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: transform 0.3s ease;
+        }
+        .song-box:hover {
+            transform: translateY(-5px);
+            background: rgba(255,255,255,0.1);
+        }
+        .song-box h4 {
+            margin-bottom: 15px;
+            font-size: 1.1em;
+            color: #4fc3f7;
+        }
+        iframe {
+            width: 100%;
+            height: 80px;
+            border-radius: 8px;
+            border: none;
+        }
+        .no-data {
+            text-align: center;
+            padding: 40px;
+            opacity: 0.7;
+            font-size: 1.1em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Personal Care Assistant</h1>
+        
+        <!-- Emotion Analysis Display -->
+        {% if emotion_data %}
+            <div class="emotion-box">
+                <h2>Your Emotion Analysis</h2>
+                
+                <!-- Captured Image -->
+                {% if captured_image %}
+                    <img src="{{ captured_image }}" alt="Captured Image" class="captured-image">
+                {% endif %}
+                
+                <div class="emotion-grid">
+                    <div class="emotion-item">
+                        <div class="emotion-label">Age</div>
+                        <div class="emotion-value">{{ emotion_data.get('age', 'N/A') }}</div>
+                    </div>
+                    <div class="emotion-item">
+                        <div class="emotion-label">Smile Status</div>
+                        <div class="emotion-value">{{ emotion_data.get('smile', 'N/A') }}</div>
+                    </div>
+                    <div class="emotion-item">
+                        <div class="emotion-label">Mask Status</div>
+                        <div class="emotion-value">{{ emotion_data.get('mask', 'N/A') }}</div>
+                    </div>
+                    <div class="emotion-item">
+                        <div class="emotion-label">Detected Emotion</div>
+                        <div class="emotion-value">{{ emotion_data.get('emotion', 'N/A') }}</div>
+                    </div>
+                </div>
+            </div>
+        {% endif %}
+        
+        <!-- Quote/Joke Display for Happy/Sad -->
+        {% if quote_or_joke %}
+            {% if emotion_data.get('emotion') == 'happy' %}
+                <div class="quote-box">
+                    "[Happiness Quote]" {{ quote_or_joke }}
+                </div>
+            {% elif emotion_data.get('emotion') == 'sad' %}
+                <div class="quote-box">
+                    "[Joke to Cheer You Up]" {{ quote_or_joke }}
+                </div>
+            {% elif emotion_data.get('emotion') == 'fear' %}
+                <div class="alert-box">
+                    [ALERT] {{ quote_or_joke }}
+                </div>
+            {% endif %}
+        {% endif %}
+        
+        <!-- Songs Section (only for angry emotion) -->
+        {% if emotion_data.get('emotion') == 'angry' and songs %}
+            <h3>Recommended Peaceful Songs</h3>
+            {% for song in songs %}
+                <div class="song-box">
+                    <h4>{{ song.name }}</h4>
+                    <iframe src="{{ song.embed_url }}" 
+                        frameborder="0"
+                        allow="autoplay; clipboard-write; encrypted-media; fullscreen">
+                    </iframe>
+                </div>
+            {% endfor %}
+        {% endif %}
+    </div>
+</body>
+</html>
