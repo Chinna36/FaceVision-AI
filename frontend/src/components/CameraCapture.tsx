@@ -8,7 +8,7 @@ import {
   Loader2
 } from "lucide-react";
 
-const BACKEND_URL = "http://127.0.0.1:8000";
+const BACKEND_URL = "https://facevision-ai-2yj1.onrender.com";
 
 interface CameraCaptureProps {
   onResult: (data: any) => void;
