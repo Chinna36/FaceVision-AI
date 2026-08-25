@@ -33,6 +33,9 @@ GUARDIAN_EMAIL = os.getenv("GUARDIAN_EMAIL")
 
 # ================== APP ==================
 app = FastAPI()
+@app.get("/")
+def root():
+    return {"status": "Backend is working"}
 
 app.add_middleware(
     CORSMiddleware,
