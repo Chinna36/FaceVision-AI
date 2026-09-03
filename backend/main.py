@@ -65,17 +65,18 @@ except Exception as e:
 # DEEPFACE
 # ============================================================
 
-try:
-    from deepface import DeepFace
-
-    DEEPFACE_AVAILABLE = True
-
-    print("DeepFace imported successfully.")
-
-except Exception as e:
+# ============================================================
+# EMOTION DETECTION
+# ============================================================
+# DeepFace is temporarily disabled during Render deployment.
+# This prevents TensorFlow/DeepFace from consuming too much
+# memory during application startup.
 
     DeepFace = None
     DEEPFACE_AVAILABLE = False
+
+    print("DeepFace emotion detection is temporarily disabled.")
+    print("Emotion will return: neutral")
 
     print("DeepFace import failed:")
     print(type(e).__name__)
@@ -929,17 +930,19 @@ def health():
 
 def detect_emotion(face):
 
-    print(
-        "STEP 5: Running emotion detection..."
-    )
+    print("STEP 5: Emotion detection...")
 
-    if not DEEPFACE_AVAILABLE:
+    # DeepFace is intentionally disabled for the first
+    # stable Render deployment.
+    #
+    # We will enable it after the basic image analysis
+    # endpoint is working reliably.
 
-        print(
-            "DeepFace is unavailable."
-        )
+    emotion = "neutral"
 
-        return "neutral"
+    print("EMOTION:", emotion)
+
+    return emotion
 
     try:
 
