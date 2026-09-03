@@ -1544,13 +1544,13 @@ def init_auth_db():
     conn = get_db()
 
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            full_name TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            guardian_email TEXT,
-            created_at TEXT NOT NULL
+        CREATE TABLE IF NOT EXISTS password_resets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        code_hash TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
         )
     """)
 
@@ -1605,6 +1605,43 @@ def verify_password(password: str, stored_hash: str) -> bool:
     except Exception:
         return False
 
+def send_reset_email(to_email: str, reset_code: str):
+    smtp_email = os.getenv("SMTP_EMAIL")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+
+    if not smtp_email or not smtp_password:
+        raise RuntimeError("SMTP email configuration is missing.")
+
+    message = EmailMessage()
+
+    message["Subject"] = "FaceVision AI - Password Reset Code"
+    message["From"] = smtp_email
+    message["To"] = to_email
+
+    message.set_content(
+        f"""
+Hello,
+
+We received a request to reset your FaceVision AI password.
+
+Your password reset code is:
+
+{reset_code}
+
+This code will expire in 10 minutes.
+
+If you did not request a password reset, you can safely ignore this email.
+
+Regards,
+FaceVision AI
+"""
+    )
+
+    with smtplib.SMTP(smtp_host, 587) as server:
+        server.starttls()
+        server.login(smtp_email, smtp_password)
+        server.send_message(message)
 
 class RegisterRequest(BaseModel):
     fullName: str
@@ -1617,6 +1654,8 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class ForgotPasswordRequest(BaseModel):
+    email: str
 
 # Initialize authentication database
 init_auth_db()
@@ -1769,6 +1808,91 @@ def login_user(data: LoginRequest):
                 "email": user["email"],
                 "guardianEmail": user["guardian_email"]
             }
+        }
+
+    finally:
+        conn.close()
+
+@app.post("/forgot-password")
+def forgot_password(data: ForgotPasswordRequest):
+    email = data.email.strip().lower()
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email is required."
+        )
+
+    conn = get_db()
+
+    try:
+        user = conn.execute(
+            """
+            SELECT id, email
+            FROM users
+            WHERE email = ?
+            """,
+            (email,)
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="No account was found with this email."
+            )
+
+        # Invalidate any previous unused reset codes
+        conn.execute(
+            """
+            UPDATE password_resets
+            SET used = 1
+            WHERE user_id = ? AND used = 0
+            """,
+            (user["id"],)
+        )
+
+        # Generate a 6-digit code
+        reset_code = f"{secrets.randbelow(1000000):06d}"
+
+        # Hash the code before storing it
+        code_hash = hashlib.sha256(
+            reset_code.encode("utf-8")
+        ).hexdigest()
+
+        now = datetime.datetime.utcnow()
+        expires_at = now + datetime.timedelta(minutes=10)
+
+        conn.execute(
+            """
+            INSERT INTO password_resets
+            (
+                user_id,
+                code_hash,
+                expires_at,
+                used,
+                created_at
+            )
+            VALUES (?, ?, ?, 0, ?)
+            """,
+            (
+                user["id"],
+                code_hash,
+                expires_at.isoformat(),
+                now.isoformat()
+            )
+        )
+
+        conn.commit()
+
+        # Send the actual code to the user's email
+        send_reset_email(
+            user["email"],
+            reset_code
+        )
+
+        return {
+            "success": True,
+            "message": "Password reset code sent to your email."
         }
 
     finally:
