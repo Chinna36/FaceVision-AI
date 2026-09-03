@@ -1,7 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
 
 import cv2
 import json
@@ -18,10 +17,9 @@ from email.message import EmailMessage
 
 from dotenv import load_dotenv
 
-
-# ============================================================
-# ENVIRONMENT
-# ============================================================
+# ------------------------------------------------------------
+# LOAD ENVIRONMENT VARIABLES
+# ------------------------------------------------------------
 
 load_dotenv()
 
@@ -29,101 +27,43 @@ SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
 GUARDIAN_EMAIL = os.getenv("GUARDIAN_EMAIL")
 
-# Maximum image upload size: 10 MB
-MAX_IMAGE_SIZE = 10 * 1024 * 1024
+# DeepFace is disabled by default for Render stability.
+# Change this to "true" later after the basic analysis works.
+ENABLE_DEEPFACE = os.getenv("ENABLE_DEEPFACE", "false").lower() == "true"
 
-
-# ============================================================
-# TENSORFLOW / KERAS
-# ============================================================
-
-import tensorflow as tf
-
-# We use tf_keras because the mask detector is an older Keras
-# model saved with a non-standard ".model" extension.
-try:
-    import tf_keras
-    from tf_keras.models import load_model as tf_keras_load_model
-    from tf_keras.preprocessing.image import img_to_array
-
-    TF_KERAS_AVAILABLE = True
-
-    print("tf_keras imported successfully.")
-
-except Exception as e:
-    print("TF-KERAS IMPORT ERROR:")
-    print(type(e).__name__)
-    print(str(e))
-
-    TF_KERAS_AVAILABLE = False
-
-    from tensorflow.keras.models import load_model as tf_keras_load_model
-    from tensorflow.keras.preprocessing.image import img_to_array
-
-
-# ============================================================
-# DEEPFACE
-# ============================================================
-
-# ============================================================
-# EMOTION DETECTION
-# ============================================================
-# DeepFace is temporarily disabled during Render deployment.
-# This prevents TensorFlow/DeepFace from consuming too much
-# memory during application startup.
-
-    DeepFace = None
-    DEEPFACE_AVAILABLE = False
-
-    print("DeepFace emotion detection is temporarily disabled.")
-    print("Emotion will return: neutral")
-
-    print("DeepFace import failed:")
-    print(type(e).__name__)
-    print(str(e))
-
-
-# ============================================================
-# APP
-# ============================================================
+# ------------------------------------------------------------
+# FASTAPI APP
+# ------------------------------------------------------------
 
 app = FastAPI(
-    title="FaceVision-AI API",
-    description="AI-based face, age, smile, mask and emotion analysis API",
+    title="FaceVision AI",
+    description="AI-based face analysis API",
     version="1.0.1"
 )
-
-
-# ============================================================
-# CORS
-# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# ============================================================
+# ------------------------------------------------------------
 # STATIC DIRECTORY
-# ============================================================
+# ------------------------------------------------------------
 
-STATIC_DIR = Path("static")
-STATIC_DIR.mkdir(exist_ok=True)
+Path("static").mkdir(exist_ok=True)
 
 app.mount(
     "/static",
-    StaticFiles(directory=str(STATIC_DIR)),
+    StaticFiles(directory="static"),
     name="static"
 )
 
-
-# ============================================================
-# ROOT
-# ============================================================
+# ------------------------------------------------------------
+# BASIC ROUTES
+# ------------------------------------------------------------
 
 @app.get("/")
 def root():
@@ -134,173 +74,135 @@ def root():
     }
 
 
-# ============================================================
-# RENDER HEALTH CHECK
-# ============================================================
-
 @app.get("/healthz")
 def healthz():
-    """
-    Lightweight health endpoint for Render.
-    This endpoint intentionally does not run AI inference.
-    """
-
     return {
         "status": "healthy",
         "service": "FaceVision-AI"
     }
 
 
-# ============================================================
+# ------------------------------------------------------------
 # ANALYTICS
-# ============================================================
+# ------------------------------------------------------------
 
 ANALYTICS_FILE = "analytics.json"
-
-
-def create_default_analytics():
-    return {
-        "smile_count": 0,
-        "mask_count": 0,
-        "emotion_count": {},
-        "emotion_total": 0
-    }
 
 
 def load_analytics():
 
     if not os.path.exists(ANALYTICS_FILE):
 
-        data = create_default_analytics()
-
-        try:
-            with open(ANALYTICS_FILE, "w") as f:
-                json.dump(data, f, indent=4)
-        except Exception as e:
-            print("ANALYTICS CREATE ERROR:", str(e))
-
-        return data
-
-    try:
-
-        with open(ANALYTICS_FILE, "r") as f:
-            data = json.load(f)
-
-        # Protect against old/incomplete analytics files.
-        defaults = create_default_analytics()
-
-        for key, value in defaults.items():
-            if key not in data:
-                data[key] = value
-
-        return data
-
-    except Exception as e:
-
-        print("ANALYTICS READ ERROR:")
-        print(type(e).__name__)
-        print(str(e))
-
-        return create_default_analytics()
-
-
-def save_analytics(data):
-
-    try:
+        data = {
+            "smile_count": 0,
+            "mask_count": 0,
+            "emotion_count": {},
+            "emotion_total": 0
+        }
 
         with open(ANALYTICS_FILE, "w") as f:
             json.dump(data, f, indent=4)
 
-    except Exception as e:
+    try:
 
-        print("ANALYTICS SAVE ERROR:")
-        print(type(e).__name__)
-        print(str(e))
+        with open(ANALYTICS_FILE, "r") as f:
+            return json.load(f)
+
+    except Exception:
+
+        data = {
+            "smile_count": 0,
+            "mask_count": 0,
+            "emotion_count": {},
+            "emotion_total": 0
+        }
+
+        save_analytics(data)
+
+        return data
+
+
+def save_analytics(data):
+
+    with open(ANALYTICS_FILE, "w") as f:
+        json.dump(data, f, indent=4)
 
 
 def update_analytics(smile, mask, emotion):
 
-    data = load_analytics()
+    try:
 
-    if smile == "Smiling":
-        data["smile_count"] += 1
+        data = load_analytics()
 
-    if mask == "Mask":
-        data["mask_count"] += 1
+        if smile == "Smiling":
+            data["smile_count"] += 1
 
-    if emotion:
+        if mask == "Mask":
+            data["mask_count"] += 1
 
-        data["emotion_count"][emotion] = (
-            data["emotion_count"].get(emotion, 0) + 1
+        if emotion:
+
+            data["emotion_count"][emotion] = (
+                data["emotion_count"].get(emotion, 0) + 1
+            )
+
+        data["emotion_total"] = sum(
+            data["emotion_count"].values()
         )
 
-    data["emotion_total"] = sum(
-        data["emotion_count"].values()
-    )
+        save_analytics(data)
 
-    save_analytics(data)
+    except Exception as e:
+
+        print("ANALYTICS ERROR:", str(e))
 
 
-# ============================================================
-# CONTENT
-# ============================================================
+# ------------------------------------------------------------
+# MESSAGES
+# ------------------------------------------------------------
 
 HAPPY_QUOTES = [
-    "Happiness is a journey, not a destination.",
-    "Smile! It's free therapy.",
-    "Good things are on the way.",
-    "Every day may not be good, but there's something good in every day.",
-    "Happiness is homemade.",
-    "Choose joy every day.",
-    "Keep smiling, because life is a beautiful thing and there's so much to smile about.",
-    "The best way to cheer yourself up is to try to cheer somebody else up.",
-    "Happiness is not by chance, but by choice.",
-    "Do more of what makes you happy."
+    "Keep smiling! Your happiness is contagious.",
+    "A happy face can brighten the whole day.",
+    "Keep spreading positive energy!",
+    "Your smile looks amazing!",
+    "Happiness looks great on you!"
 ]
 
 
 SAD_JOKES = [
-    "Why was the math book sad? Too many problems.",
-    "Why don't skeletons fight? They don't have guts!",
-    "Why did the scarecrow win an award? Because he was outstanding in his field!",
-    "Why did the bicycle fall over? Because it was two-tired!",
-    "Why don't scientists trust atoms? Because they make up everything!",
-    "Why did the tomato turn red? Because it saw the salad dressing!",
-    "Why did the golfer bring two pairs of pants? In case he got a hole in one!",
-    "Why did the coffee file a police report? It got mugged!",
-    "Why did the cookie go to the hospital? Because he felt crummy!",
-    "Why was the computer cold? It left its Windows open!"
+    "Why did the computer go to the doctor? Because it had a virus!",
+    "What do you call a sleeping computer? A snooze processor!",
+    "Why was the math book sad? Because it had too many problems.",
+    "What did one wall say to the other wall? I'll meet you at the corner!",
+    "Why don't scientists trust atoms? Because they make up everything!"
 ]
 
 
-# ============================================================
+# ------------------------------------------------------------
 # EMAIL ALERT
-# ============================================================
+# ------------------------------------------------------------
 
 def send_alert_email():
 
+    if not SENDER_EMAIL or not SENDER_PASSWORD or not GUARDIAN_EMAIL:
+
+        print("EMAIL ERROR: Email environment variables are not configured.")
+
+        return False
+
     try:
-
-        if not SENDER_EMAIL:
-            print("EMAIL ERROR: SENDER_EMAIL is not configured.")
-            return False
-
-        if not SENDER_PASSWORD:
-            print("EMAIL ERROR: SENDER_PASSWORD is not configured.")
-            return False
-
-        if not GUARDIAN_EMAIL:
-            print("EMAIL ERROR: GUARDIAN_EMAIL is not configured.")
-            return False
 
         msg = EmailMessage()
 
-        msg["Subject"] = "Fear Emotion Detected"
+        msg["Subject"] = "⚠ Fear Emotion Detected"
+
         msg["From"] = SENDER_EMAIL
+
         msg["To"] = GUARDIAN_EMAIL
 
         msg.set_content(
-            "Fear emotion detected by FaceVision-AI. "
+            "Fear emotion detected by FaceVision AI. "
             "Please check immediately."
         )
 
@@ -317,22 +219,20 @@ def send_alert_email():
 
             smtp.send_message(msg)
 
-        print("ALERT EMAIL SENT")
+        print("ALERT EMAIL SENT SUCCESSFULLY.")
 
         return True
 
     except Exception as e:
 
-        print("EMAIL ERROR:")
-        print(type(e).__name__)
-        print(str(e))
+        print("EMAIL ERROR:", str(e))
 
         return False
 
 
-# ============================================================
+# ------------------------------------------------------------
 # PEACEFUL MUSIC
-# ============================================================
+# ------------------------------------------------------------
 
 def get_peace_songs():
 
@@ -366,9 +266,9 @@ def get_peace_songs():
     ]
 
 
-# ============================================================
-# SAVE IMAGE
-# ============================================================
+# ------------------------------------------------------------
+# SAVE ANALYZED IMAGE
+# ------------------------------------------------------------
 
 def save_image(frame):
 
@@ -376,452 +276,452 @@ def save_image(frame):
         "img_%Y%m%d_%H%M%S_%f.jpg"
     )
 
-    path = STATIC_DIR / name
+    path = Path("static") / name
 
-    try:
+    success = cv2.imwrite(
+        str(path),
+        frame
+    )
 
-        success = cv2.imwrite(
-            str(path),
-            frame
-        )
+    if not success:
 
-        if not success:
-            print("WARNING: Could not save image.")
-            return None
-
-        return f"/static/{name}"
-
-    except Exception as e:
-
-        print("IMAGE SAVE ERROR:")
-        print(type(e).__name__)
-        print(str(e))
+        print("WARNING: Could not save image.")
 
         return None
 
+    return f"/static/{name}"
 
-# ============================================================
-# MODEL PATHS
-# ============================================================
+
+# ------------------------------------------------------------
+# MODEL DIRECTORY
+# ------------------------------------------------------------
 
 MODEL_DIR = Path("models")
 
-FACE_PROTO = MODEL_DIR / "deploy.prototxt"
 
-FACE_MODEL = (
-    MODEL_DIR /
-    "res10_300x300_ssd_iter_140000.caffemodel"
-)
-
-AGE_PROTO = MODEL_DIR / "age_deploy.prototxt"
-
-AGE_MODEL = MODEL_DIR / "age_net.caffemodel"
-
-MASK_MODEL = MODEL_DIR / "mask_detector.model"
-
-SMILE_MODEL = MODEL_DIR / "haarcascade_smile.xml"
-
-
-# ============================================================
+# ------------------------------------------------------------
 # MODEL STATUS
-# ============================================================
-
-FACE_MODEL_AVAILABLE = False
-AGE_MODEL_AVAILABLE = False
-MASK_MODEL_AVAILABLE = False
-SMILE_MODEL_AVAILABLE = False
-
+# ------------------------------------------------------------
 
 face_net = None
 age_net = None
 mask_model = None
 smile_cascade = None
 
-
-# ============================================================
-# FILE CHECK
-# ============================================================
-
-def check_model_file(path, model_name):
-
-    if not path.exists():
-
-        print(
-            f"WARNING: {model_name} not found:"
-        )
-
-        print(
-            f"       {path}"
-        )
-
-        return False
-
-    if path.is_dir():
-
-        print(
-            f"WARNING: {model_name} is a directory:"
-        )
-
-        print(
-            f"       {path}"
-        )
-
-        return False
-
-    print(
-        f"{model_name} found:"
-    )
-
-    print(
-        f"       {path}"
-    )
-
-    return True
+FACE_DETECTION_AVAILABLE = False
+AGE_DETECTION_AVAILABLE = False
+SMILE_DETECTION_AVAILABLE = False
+MASK_DETECTION_AVAILABLE = False
 
 
-# ============================================================
-# FACE MODEL
-# ============================================================
+# ------------------------------------------------------------
+# FACE DETECTION MODEL
+# ------------------------------------------------------------
 
-print()
-print("=" * 60)
+print("")
+print("============================================================")
 print("LOADING FACE DETECTION MODEL")
-print("=" * 60)
+print("============================================================")
 
 try:
 
-    if (
-        check_model_file(
-            FACE_PROTO,
-            "Face prototxt"
-        )
-        and
-        check_model_file(
-            FACE_MODEL,
-            "Face caffemodel"
-        )
-    ):
+    face_prototxt = MODEL_DIR / "deploy.prototxt"
 
-        face_net = cv2.dnn.readNet(
-            str(FACE_PROTO),
-            str(FACE_MODEL)
+    face_weights = (
+        MODEL_DIR /
+        "res10_300x300_ssd_iter_140000.caffemodel"
+    )
+
+    print("Face prototxt:", face_prototxt)
+    print("Face weights:", face_weights)
+
+    if not face_prototxt.exists():
+
+        raise FileNotFoundError(
+            f"Missing file: {face_prototxt}"
         )
 
-        FACE_MODEL_AVAILABLE = True
+    if not face_weights.exists():
 
-        print(
-            "Face detection model loaded successfully."
+        raise FileNotFoundError(
+            f"Missing file: {face_weights}"
         )
+
+    face_net = cv2.dnn.readNet(
+        str(face_prototxt),
+        str(face_weights)
+    )
+
+    FACE_DETECTION_AVAILABLE = True
+
+    print("Face detection model loaded successfully.")
 
 except Exception as e:
 
-    print("FACE MODEL LOAD ERROR:")
-    print(type(e).__name__)
-    print(str(e))
+    print(
+        "FACE MODEL ERROR:",
+        repr(e)
+    )
+
+    face_net = None
 
 
-# ============================================================
-# AGE MODEL
-# ============================================================
+# ------------------------------------------------------------
+# AGE DETECTION MODEL
+# ------------------------------------------------------------
 
-print()
-print("=" * 60)
+print("")
+print("============================================================")
 print("LOADING AGE DETECTION MODEL")
-print("=" * 60)
+print("============================================================")
 
 try:
 
-    if (
-        check_model_file(
-            AGE_PROTO,
-            "Age prototxt"
-        )
-        and
-        check_model_file(
-            AGE_MODEL,
-            "Age caffemodel"
-        )
-    ):
+    age_prototxt = MODEL_DIR / "age_deploy.prototxt"
 
-        age_net = cv2.dnn.readNet(
-            str(AGE_PROTO),
-            str(AGE_MODEL)
+    # Your models folder contains age_net.caffemodel.
+    age_weights = MODEL_DIR / "age_net.caffemodel"
+
+    # Fallback to age_net (1).caffemodel if necessary.
+    if not age_weights.exists():
+
+        fallback_age_weights = (
+            MODEL_DIR / "age_net (1).caffemodel"
         )
 
-        AGE_MODEL_AVAILABLE = True
+        if fallback_age_weights.exists():
 
-        print(
-            "Age detection model loaded successfully."
+            age_weights = fallback_age_weights
+
+    print("Age prototxt:", age_prototxt)
+    print("Age weights:", age_weights)
+
+    if not age_prototxt.exists():
+
+        raise FileNotFoundError(
+            f"Missing file: {age_prototxt}"
         )
+
+    if not age_weights.exists():
+
+        raise FileNotFoundError(
+            f"Missing age model file: {age_weights}"
+        )
+
+    age_net = cv2.dnn.readNet(
+        str(age_prototxt),
+        str(age_weights)
+    )
+
+    AGE_DETECTION_AVAILABLE = True
+
+    print("Age detection model loaded successfully.")
 
 except Exception as e:
 
-    print("AGE MODEL LOAD ERROR:")
-    print(type(e).__name__)
-    print(str(e))
+    print(
+        "AGE MODEL ERROR:",
+        repr(e)
+    )
+
+    age_net = None
 
 
-# ============================================================
-# SMILE MODEL
-# ============================================================
+# ------------------------------------------------------------
+# SMILE DETECTION MODEL
+# ------------------------------------------------------------
 
-print()
-print("=" * 60)
+print("")
+print("============================================================")
 print("LOADING SMILE DETECTION MODEL")
-print("=" * 60)
+print("============================================================")
 
 try:
 
-    if check_model_file(
-        SMILE_MODEL,
-        "Smile cascade"
-    ):
+    smile_path = MODEL_DIR / "haarcascade_smile.xml"
 
-        smile_cascade = cv2.CascadeClassifier(
-            str(SMILE_MODEL)
+    print("Smile cascade:", smile_path)
+
+    if not smile_path.exists():
+
+        raise FileNotFoundError(
+            f"Missing file: {smile_path}"
         )
 
-        if smile_cascade.empty():
+    smile_cascade = cv2.CascadeClassifier(
+        str(smile_path)
+    )
 
-            print(
-                "Smile cascade failed to load."
-            )
+    if smile_cascade.empty():
 
-        else:
+        raise RuntimeError(
+            "Smile cascade could not be loaded."
+        )
 
-            SMILE_MODEL_AVAILABLE = True
+    SMILE_DETECTION_AVAILABLE = True
 
-            print(
-                "Smile detection model loaded successfully."
-            )
+    print("Smile detection model loaded successfully.")
 
 except Exception as e:
 
-    print("SMILE MODEL LOAD ERROR:")
-    print(type(e).__name__)
-    print(str(e))
+    print(
+        "SMILE MODEL ERROR:",
+        repr(e)
+    )
+
+    smile_cascade = None
 
 
-# ============================================================
+# ------------------------------------------------------------
 # MASK MODEL
-# ============================================================
+# ------------------------------------------------------------
 
-print()
-print("=" * 60)
-print("LOADING MASK DETECTION MODEL")
-print("=" * 60)
+def load_mask_model():
 
-print(
-    f"Mask model path: {MASK_MODEL}"
-)
+    """
+    Loads the mask detector.
 
+    The project contains:
+        models/mask_detector.model
 
-def load_mask_detector():
+    Keras 3 expects .keras or .h5 extensions, while this
+    project uses the .model extension.
 
-    global MASK_MODEL_AVAILABLE
+    We therefore detect an HDF5 model and temporarily copy it
+    to a .h5 file before loading it with tf_keras.
+    """
 
-    MASK_MODEL_AVAILABLE = False
+    mask_path = MODEL_DIR / "mask_detector.model"
 
-    if not MASK_MODEL.exists():
+    print("")
+    print("============================================================")
+    print("LOADING MASK DETECTION MODEL")
+    print("============================================================")
 
-        print()
-        print("MASK MODEL NOT FOUND")
-        print(
-            f"Expected file: {MASK_MODEL}"
+    print("Mask model path:", mask_path)
+
+    if not mask_path.exists():
+
+        raise FileNotFoundError(
+            f"Missing mask model: {mask_path}"
         )
 
-        return None
-
     # --------------------------------------------------------
-    # Method 1:
-    # tf_keras directly
+    # Try legacy tf_keras first.
     # --------------------------------------------------------
-
-    if TF_KERAS_AVAILABLE:
-
-        try:
-
-            print()
-            print(
-                "Trying tf_keras legacy loader..."
-            )
-
-            model = tf_keras_load_model(
-                str(MASK_MODEL),
-                compile=False
-            )
-
-            MASK_MODEL_AVAILABLE = True
-
-            print(
-                "MASK MODEL LOADED SUCCESSFULLY "
-                "USING TF-KERAS."
-            )
-
-            return model
-
-        except Exception as e:
-
-            print()
-            print(
-                "TF-KERAS MASK LOAD FAILED:"
-            )
-
-            print(type(e).__name__)
-            print(str(e))
-
-    # --------------------------------------------------------
-    # Method 2:
-    # Check if it is actually HDF5 and make .h5 copy
-    # --------------------------------------------------------
-
-    temporary_h5 = None
 
     try:
 
-        import h5py
+        from tf_keras.models import load_model
 
-        print()
-        print(
-            "Checking whether mask_detector.model "
-            "is an HDF5 model..."
+        print("Trying tf_keras legacy loader...")
+
+        # Check whether the file is an HDF5 file.
+        with open(mask_path, "rb") as f:
+
+            header = f.read(8)
+
+        is_hdf5 = (
+            header == b"\x89HDF\r\n\x1a\n"
         )
 
-        with h5py.File(
-            str(MASK_MODEL),
-            "r"
-        ) as f:
+        print("HDF5 model detected:", is_hdf5)
 
-            print(
-                "HDF5 model detected."
+        if is_hdf5:
+
+            temp_dir = Path(
+                tempfile.mkdtemp(
+                    prefix="facevision_mask_"
+                )
+            )
+
+            temp_h5 = temp_dir / "mask_detector.h5"
+
+            shutil.copy2(
+                mask_path,
+                temp_h5
             )
 
             print(
-                "HDF5 keys:",
-                list(f.keys())
+                "Temporary H5 model:",
+                temp_h5
             )
-
-        # Create temporary H5 file.
-        fd, temporary_h5_path = tempfile.mkstemp(
-            suffix=".h5"
-        )
-
-        os.close(fd)
-
-        temporary_h5 = Path(
-            temporary_h5_path
-        )
-
-        shutil.copyfile(
-            str(MASK_MODEL),
-            str(temporary_h5)
-        )
-
-        print(
-            "Temporary H5 copy created:"
-        )
-
-        print(
-            temporary_h5
-        )
-
-        # Try tf_keras first.
-        if TF_KERAS_AVAILABLE:
 
             try:
 
-                model = tf_keras_load_model(
-                    str(temporary_h5),
+                model = load_model(
+                    str(temp_h5),
                     compile=False
                 )
 
-                MASK_MODEL_AVAILABLE = True
+            finally:
 
-                print(
-                    "MASK MODEL LOADED SUCCESSFULLY "
-                    "FROM TEMPORARY H5 FILE."
-                )
+                try:
 
-                return model
+                    shutil.rmtree(
+                        temp_dir,
+                        ignore_errors=True
+                    )
 
-            except Exception as e:
+                except Exception:
 
-                print(
-                    "Temporary H5 tf_keras loading failed:"
-                )
+                    pass
 
-                print(type(e).__name__)
-                print(str(e))
+        else:
 
-        # Final fallback.
-        try:
-
-            model = tf.keras.models.load_model(
-                str(temporary_h5),
+            model = load_model(
+                str(mask_path),
                 compile=False
             )
 
-            MASK_MODEL_AVAILABLE = True
+        print(
+            "MASK MODEL LOADED SUCCESSFULLY USING TF-KERAS."
+        )
+
+        return model
+
+    except Exception as e:
+
+        print(
+            "TF-KERAS MASK LOADING ERROR:",
+            repr(e)
+        )
+
+    # --------------------------------------------------------
+    # Fallback to TensorFlow Keras.
+    # --------------------------------------------------------
+
+    try:
+
+        from tensorflow.keras.models import load_model
+
+        print(
+            "Trying TensorFlow Keras fallback loader..."
+        )
+
+        temp_dir = None
+
+        try:
+
+            with open(mask_path, "rb") as f:
+
+                header = f.read(8)
+
+            is_hdf5 = (
+                header == b"\x89HDF\r\n\x1a\n"
+            )
+
+            if is_hdf5:
+
+                temp_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix="facevision_mask_tf_"
+                    )
+                )
+
+                temp_h5 = temp_dir / "mask_detector.h5"
+
+                shutil.copy2(
+                    mask_path,
+                    temp_h5
+                )
+
+                model_path = temp_h5
+
+            else:
+
+                model_path = mask_path
+
+            model = load_model(
+                str(model_path),
+                compile=False
+            )
 
             print(
-                "MASK MODEL LOADED SUCCESSFULLY "
-                "USING TEMPORARY H5 FILE."
+                "MASK MODEL LOADED SUCCESSFULLY USING "
+                "TENSORFLOW KERAS."
             )
 
             return model
 
-        except Exception as e:
+        finally:
 
-            print(
-                "TensorFlow temporary H5 loading failed:"
-            )
+            if temp_dir is not None:
 
-            print(type(e).__name__)
-            print(str(e))
+                shutil.rmtree(
+                    temp_dir,
+                    ignore_errors=True
+                )
 
     except Exception as e:
 
-        print()
         print(
-            "MASK MODEL HDF5 CHECK FAILED:"
+            "TENSORFLOW KERAS MASK LOADING ERROR:",
+            repr(e)
         )
 
-        print(type(e).__name__)
-        print(str(e))
-
-    finally:
-
-        # Remove temporary file.
-        if temporary_h5 is not None:
-
-            try:
-
-                if temporary_h5.exists():
-                    temporary_h5.unlink()
-
-            except Exception as e:
-
-                print(
-                    "WARNING: Could not delete temporary H5 file:",
-                    str(e)
-                )
-
-    print()
-    print("=" * 60)
-    print("MASK MODEL COULD NOT BE LOADED")
-    print("=" * 60)
-
-    MASK_MODEL_AVAILABLE = False
-
-    return None
+    raise RuntimeError(
+        "Could not load mask_detector.model."
+    )
 
 
-mask_model = load_mask_detector()
+try:
+
+    mask_model = load_mask_model()
+
+    MASK_DETECTION_AVAILABLE = True
+
+except Exception as e:
+
+    print(
+        "MASK MODEL ERROR:",
+        repr(e)
+    )
+
+    mask_model = None
 
 
-# ============================================================
-# AGE LIST
-# ============================================================
+# ------------------------------------------------------------
+# MODEL SUMMARY
+# ------------------------------------------------------------
+
+print("")
+print("============================================================")
+print("ALL AVAILABLE MODELS")
+print("============================================================")
+
+print(
+    "Face detection:",
+    FACE_DETECTION_AVAILABLE
+)
+
+print(
+    "Age detection:",
+    AGE_DETECTION_AVAILABLE
+)
+
+print(
+    "Smile detection:",
+    SMILE_DETECTION_AVAILABLE
+)
+
+print(
+    "Mask detection:",
+    MASK_DETECTION_AVAILABLE
+)
+
+print(
+    "DeepFace enabled:",
+    ENABLE_DEEPFACE
+)
+
+print("============================================================")
+print("")
+
+
+# ------------------------------------------------------------
+# AGE LABELS
+# ------------------------------------------------------------
 
 AGE_LIST = [
     "0-2",
@@ -839,149 +739,75 @@ AGE_LIST = [
 ]
 
 
-# ============================================================
-# FINAL MODEL STATUS
-# ============================================================
-
-print()
-print("=" * 60)
-print("ALL AVAILABLE MODELS")
-print("=" * 60)
-
-print(
-    "Face detection:",
-    FACE_MODEL_AVAILABLE
-)
-
-print(
-    "Age detection:",
-    AGE_MODEL_AVAILABLE
-)
-
-print(
-    "Smile detection:",
-    SMILE_MODEL_AVAILABLE
-)
-
-print(
-    "Mask detection:",
-    MASK_MODEL_AVAILABLE
-)
-
-print(
-    "Emotion detection:",
-    DEEPFACE_AVAILABLE
-)
-
-print("=" * 60)
-print()
-
-
-# ============================================================
-# MODELS STATUS API
-# ============================================================
-
-@app.get("/models")
-def models_status():
-
-    return {
-        "face_detection": FACE_MODEL_AVAILABLE,
-        "age_detection": AGE_MODEL_AVAILABLE,
-        "smile_detection": SMILE_MODEL_AVAILABLE,
-        "mask_detection": MASK_MODEL_AVAILABLE,
-        "emotion_detection": DEEPFACE_AVAILABLE,
-
-        "emotion_note": (
-            "Emotion detection is enabled using DeepFace."
-            if DEEPFACE_AVAILABLE
-            else
-            "DeepFace could not be loaded. Emotion will return neutral."
-        ),
-
-        "models_directory": str(MODEL_DIR),
-
-        "api_status": "ready"
-    }
-
-
-# ============================================================
-# HEALTH API
-# ============================================================
-
-@app.get("/health")
-def health():
-
-    return {
-        "status": "healthy",
-
-        "models": {
-            "face": FACE_MODEL_AVAILABLE,
-            "age": AGE_MODEL_AVAILABLE,
-            "smile": SMILE_MODEL_AVAILABLE,
-            "mask": MASK_MODEL_AVAILABLE,
-            "emotion": DEEPFACE_AVAILABLE
-        }
-    }
-
-
-# ============================================================
+# ------------------------------------------------------------
 # EMOTION DETECTION
-# ============================================================
+# ------------------------------------------------------------
 
 def detect_emotion(face):
 
     print("STEP 5: Emotion detection...")
 
-    # DeepFace is intentionally disabled for the first
-    # stable Render deployment.
+    # --------------------------------------------------------
+    # Render stability mode
+    # --------------------------------------------------------
+
+    if not ENABLE_DEEPFACE:
+
+        print(
+            "DeepFace disabled. Returning neutral emotion."
+        )
+
+        return "neutral"
+
+    # --------------------------------------------------------
+    # Lazy import
     #
-    # We will enable it after the basic image analysis
-    # endpoint is working reliably.
-
-    emotion = "neutral"
-
-    print("EMOTION:", emotion)
-
-    return emotion
+    # DeepFace is NOT imported during application startup.
+    # It is imported only when an analysis request actually
+    # needs emotion detection.
+    # --------------------------------------------------------
 
     try:
 
-        # Face is already cropped.
-        # DeepFace does not need another detector.
+        print("Loading DeepFace on demand...")
 
-        emotion_result = DeepFace.analyze(
+        from deepface import DeepFace
+
+        print("DeepFace imported successfully.")
+
+        result = DeepFace.analyze(
             img_path=face,
             actions=["emotion"],
             enforce_detection=False,
-            detector_backend="skip"
+            detector_backend="skip",
+            silent=True
         )
 
-        # DeepFace normally returns a list.
-        if isinstance(
-            emotion_result,
-            list
-        ):
+        if isinstance(result, list):
 
-            if len(emotion_result) == 0:
-                return "neutral"
+            if len(result) == 0:
 
-            emotion_result = emotion_result[0]
+                emotion = "neutral"
 
-        if not isinstance(
-            emotion_result,
-            dict
-        ):
+            else:
 
-            return "neutral"
+                emotion = result[0].get(
+                    "dominant_emotion",
+                    "neutral"
+                )
 
-        emotion = emotion_result.get(
-            "dominant_emotion",
-            "neutral"
-        )
+        else:
 
-        emotion = str(
-            emotion
-        ).lower()
+            emotion = result.get(
+                "dominant_emotion",
+                "neutral"
+            )
+
+        if not emotion:
+
+            emotion = "neutral"
+
+        emotion = str(emotion).lower()
 
         print(
             "EMOTION:",
@@ -992,341 +818,133 @@ def detect_emotion(face):
 
     except Exception as e:
 
-        print()
         print(
-            "EMOTION DETECTION ERROR"
+            "DEEPFACE ERROR:",
+            repr(e)
         )
 
-        print(
-            type(e).__name__
-        )
-
-        print(
-            str(e)
-        )
-
-        print(
-            "Falling back to neutral."
-        )
+        # Never allow emotion failure to break
+        # the complete image analysis.
 
         return "neutral"
 
 
-# ============================================================
-# MASK DETECTION
-# ============================================================
+# ------------------------------------------------------------
+# FACE BOX HELPER
+# ------------------------------------------------------------
 
-def detect_mask(face):
+def get_safe_face_box(
+    detection,
+    width,
+    height
+):
 
-    print(
-        "STEP 4: Running mask detection..."
+    box = (
+        detection[3:7] *
+        np.array(
+            [width, height, width, height]
+        )
+    ).astype(int)
+
+    x1, y1, x2, y2 = box
+
+    # Add small padding around face.
+    padding_x = int(
+        (x2 - x1) * 0.10
     )
 
-    if mask_model is None:
+    padding_y = int(
+        (y2 - y1) * 0.10
+    )
 
-        print(
-            "MASK MODEL IS NOT AVAILABLE."
-        )
+    x1 -= padding_x
+    y1 -= padding_y
+    x2 += padding_x
+    y2 += padding_y
 
-        return "Unknown"
+    # Clip to image boundaries.
+    x1 = max(
+        0,
+        min(x1, width - 1)
+    )
 
-    try:
+    y1 = max(
+        0,
+        min(y1, height - 1)
+    )
 
-        resized_face = cv2.resize(
-            face,
-            (224, 224)
-        )
+    x2 = max(
+        0,
+        min(x2, width)
+    )
 
-        arr = img_to_array(
-            resized_face
-        )
+    y2 = max(
+        0,
+        min(y2, height)
+    )
 
-        arr = arr.astype(
-            "float32"
-        ) / 255.0
-
-        arr = np.expand_dims(
-            arr,
-            axis=0
-        )
-
-        prediction = mask_model.predict(
-            arr,
-            verbose=0
-        )
-
-        prediction = np.asarray(
-            prediction
-        )
-
-        print(
-            "MASK RAW PREDICTION:",
-            prediction
-        )
-
-        # Expected output:
-        #
-        # [mask_probability, no_mask_probability]
-        #
-        # Some old models may return a nested array.
-
-        if prediction.ndim < 2:
-
-            print(
-                "Unexpected mask prediction dimensions."
-            )
-
-            return "Unknown"
-
-        values = prediction[0]
-
-        if len(values) < 2:
-
-            print(
-                "Unexpected mask model output."
-            )
-
-            return "Unknown"
-
-        mask_val = float(
-            values[0]
-        )
-
-        no_mask_val = float(
-            values[1]
-        )
-
-        if mask_val > no_mask_val:
-
-            mask = "Mask"
-
-        else:
-
-            mask = "No Mask"
-
-        print(
-            "MASK:",
-            mask
-        )
-
-        return mask
-
-    except Exception as e:
-
-        print()
-        print(
-            "MASK DETECTION ERROR"
-        )
-
-        print(
-            type(e).__name__
-        )
-
-        print(
-            str(e)
-        )
-
-        return "Unknown"
-
-
-# ============================================================
-# FACE DETECTION
-# ============================================================
-
-def detect_face(frame):
-
-    if face_net is None:
-
-        print(
-            "FACE MODEL IS NOT AVAILABLE."
-        )
+    if x2 <= x1 or y2 <= y1:
 
         return None
 
-    try:
-
-        h, w = frame.shape[:2]
-
-        # IMPORTANT:
-        # This blob creation was missing in the older version.
-        blob = cv2.dnn.blobFromImage(
-            frame,
-            scalefactor=1.0,
-            size=(300, 300),
-            mean=(104, 117, 123)
-        )
-
-        face_net.setInput(
-            blob
-        )
-
-        detections = face_net.forward()
-
-        best_face = None
-        best_confidence = 0.0
-
-        for i in range(
-            detections.shape[2]
-        ):
-
-            confidence = float(
-                detections[
-                    0,
-                    0,
-                    i,
-                    2
-                ]
-            )
-
-            if confidence < 0.60:
-                continue
-
-            box = (
-                detections[
-                    0,
-                    0,
-                    i,
-                    3:7
-                ]
-                *
-                np.array(
-                    [
-                        w,
-                        h,
-                        w,
-                        h
-                    ]
-                )
-            ).astype(int)
-
-            x1, y1, x2, y2 = box
-
-            # Clamp coordinates.
-            x1 = max(
-                0,
-                min(x1, w - 1)
-            )
-
-            y1 = max(
-                0,
-                min(y1, h - 1)
-            )
-
-            x2 = max(
-                0,
-                min(x2, w)
-            )
-
-            y2 = max(
-                0,
-                min(y2, h)
-            )
-
-            if x2 <= x1:
-                continue
-
-            if y2 <= y1:
-                continue
-
-            current_face = frame[
-                y1:y2,
-                x1:x2
-            ]
-
-            if current_face.size == 0:
-                continue
-
-            if confidence > best_confidence:
-
-                best_confidence = confidence
-
-                best_face = current_face
-
-        print(
-            "BEST FACE CONFIDENCE:",
-            best_confidence
-        )
-
-        return best_face
-
-    except Exception as e:
-
-        print(
-            "FACE DETECTION ERROR:"
-        )
-
-        print(
-            type(e).__name__
-        )
-
-        print(
-            str(e)
-        )
-
-        return None
+    return x1, y1, x2, y2
 
 
-# ============================================================
-# ANALYZE API
-# ============================================================
+# ------------------------------------------------------------
+# ANALYZE ENDPOINT
+# ------------------------------------------------------------
 
 @app.post("/analyze")
 async def analyze(
     file: UploadFile = File(...)
 ):
 
-    print()
-    print("=" * 60)
+    print("")
+    print("============================================================")
     print("NEW ANALYZE REQUEST")
-    print("=" * 60)
+    print("============================================================")
 
     try:
 
         # ----------------------------------------------------
-        # Check filename
+        # Validate upload
         # ----------------------------------------------------
 
+        if file is None:
+
+            return {
+                "success": False,
+                "error": "No file was uploaded."
+            }
+
         print(
-            "Received file:",
+            "Uploaded filename:",
             file.filename
         )
 
+        print(
+            "Uploaded content type:",
+            file.content_type
+        )
+
         # ----------------------------------------------------
-        # Read uploaded file
+        # Read file
         # ----------------------------------------------------
 
         contents = await file.read()
 
+        if not contents:
+
+            return {
+                "success": False,
+                "error": "Uploaded file is empty."
+            }
+
         print(
-            "File size:",
+            "Uploaded file size:",
             len(contents),
             "bytes"
         )
-
-        if not contents:
-
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error":
-                        "Uploaded file is empty"
-                }
-            )
-
-        # ----------------------------------------------------
-        # Protect server from huge uploads
-        # ----------------------------------------------------
-
-        if len(contents) > MAX_IMAGE_SIZE:
-
-            return JSONResponse(
-                status_code=413,
-                content={
-                    "error":
-                        "Image is too large. "
-                        "Maximum size is 10 MB."
-                }
-            )
 
         # ----------------------------------------------------
         # Decode image
@@ -1342,74 +960,126 @@ async def analyze(
 
         if frame is None:
 
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error":
-                        "Could not decode uploaded image."
-                }
-            )
+            return {
+                "success": False,
+                "error": "Could not decode uploaded image."
+            }
 
-        h, w = frame.shape[:2]
+        height, width = frame.shape[:2]
 
-        if h == 0 or w == 0:
+        if height <= 0 or width <= 0:
 
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error":
-                        "Invalid image dimensions."
-                }
-            )
+            return {
+                "success": False,
+                "error": "Invalid image dimensions."
+            }
 
         print(
-            f"IMAGE RECEIVED: {w}x{h}"
+            f"IMAGE RECEIVED: {width}x{height}"
         )
 
         # ----------------------------------------------------
-        # FACE DETECTION
+        # STEP 1 — FACE DETECTION
         # ----------------------------------------------------
 
         print(
             "STEP 1: Running face detection..."
         )
 
-        if not FACE_MODEL_AVAILABLE:
+        if not FACE_DETECTION_AVAILABLE:
 
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "error":
-                        "Face detection model is not available."
-                }
-            )
+            return {
+                "success": False,
+                "error": "Face detection model is unavailable."
+            }
 
-        face = detect_face(
-            frame
+        # THIS WAS MISSING IN THE OLD CODE.
+        # Create the face detection blob.
+        blob = cv2.dnn.blobFromImage(
+            frame,
+            scalefactor=1.0,
+            size=(300, 300),
+            mean=(104.0, 117.0, 123.0),
+            swapRB=False,
+            crop=False
         )
+
+        face_net.setInput(blob)
+
+        detections = face_net.forward()
 
         print(
-            "STEP 1 DONE: Face detection completed"
+            "STEP 1 DONE: Face detection completed."
         )
+
+        # ----------------------------------------------------
+        # Find best face
+        # ----------------------------------------------------
+
+        face = None
+        face_box = None
+        highest_confidence = 0.0
+
+        for i in range(
+            detections.shape[2]
+        ):
+
+            confidence = float(
+                detections[0, 0, i, 2]
+            )
+
+            if confidence > 0.60:
+
+                current_box = get_safe_face_box(
+                    detections[0, 0, i],
+                    width,
+                    height
+                )
+
+                if current_box is None:
+
+                    continue
+
+                x1, y1, x2, y2 = current_box
+
+                current_face = frame[
+                    y1:y2,
+                    x1:x2
+                ]
+
+                if current_face.size == 0:
+
+                    continue
+
+                if confidence > highest_confidence:
+
+                    highest_confidence = confidence
+
+                    face = current_face
+
+                    face_box = current_box
 
         if face is None:
 
             print(
-                "NO FACE DETECTED"
+                "NO FACE DETECTED."
             )
 
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error":
-                        "No face detected. "
-                        "Please upload a clear image "
-                        "with a visible face."
-                }
+            return {
+                "success": False,
+                "error": "No face detected. Please upload a clear face image."
+            }
+
+        print(
+            "Face detected with confidence:",
+            round(
+                highest_confidence,
+                4
             )
+        )
 
         # ----------------------------------------------------
-        # AGE
+        # STEP 2 — AGE DETECTION
         # ----------------------------------------------------
 
         print(
@@ -1418,7 +1088,7 @@ async def analyze(
 
         age = "Unknown"
 
-        if AGE_MODEL_AVAILABLE:
+        if AGE_DETECTION_AVAILABLE:
 
             try:
 
@@ -1441,19 +1111,17 @@ async def analyze(
                     age_blob
                 )
 
-                age_predictions = (
-                    age_net.forward()[0]
-                )
+                age_predictions = age_net.forward()
 
                 age_index = int(
                     np.argmax(
-                        age_predictions
+                        age_predictions[0]
                     )
                 )
 
                 if (
-                    0 <= age_index <
-                    len(AGE_LIST)
+                    0 <= age_index
+                    < len(AGE_LIST)
                 ):
 
                     age = AGE_LIST[
@@ -1463,15 +1131,8 @@ async def analyze(
             except Exception as e:
 
                 print(
-                    "AGE DETECTION ERROR:"
-                )
-
-                print(
-                    type(e).__name__
-                )
-
-                print(
-                    str(e)
+                    "AGE DETECTION ERROR:",
+                    repr(e)
                 )
 
                 age = "Unknown"
@@ -1482,7 +1143,7 @@ async def analyze(
         )
 
         # ----------------------------------------------------
-        # SMILE
+        # STEP 3 — SMILE DETECTION
         # ----------------------------------------------------
 
         print(
@@ -1491,7 +1152,7 @@ async def analyze(
 
         smile = "Not Smiling"
 
-        if SMILE_MODEL_AVAILABLE:
+        if SMILE_DETECTION_AVAILABLE:
 
             try:
 
@@ -1515,15 +1176,8 @@ async def analyze(
             except Exception as e:
 
                 print(
-                    "SMILE DETECTION ERROR:"
-                )
-
-                print(
-                    type(e).__name__
-                )
-
-                print(
-                    str(e)
+                    "SMILE DETECTION ERROR:",
+                    repr(e)
                 )
 
                 smile = "Not Smiling"
@@ -1534,15 +1188,113 @@ async def analyze(
         )
 
         # ----------------------------------------------------
-        # MASK
+        # STEP 4 — MASK DETECTION
         # ----------------------------------------------------
 
-        mask = detect_mask(
-            face
+        print(
+            "STEP 4: Running mask detection..."
+        )
+
+        mask = "Unknown"
+
+        if MASK_DETECTION_AVAILABLE:
+
+            try:
+
+                mask_face = cv2.resize(
+                    face,
+                    (224, 224)
+                )
+
+                # Keep the original project's input format.
+                arr = (
+                    mask_face.astype(
+                        np.float32
+                    ) / 255.0
+                )
+
+                arr = np.expand_dims(
+                    arr,
+                    axis=0
+                )
+
+                prediction = mask_model.predict(
+                    arr,
+                    verbose=0
+                )
+
+                prediction = np.asarray(
+                    prediction
+                )
+
+                print(
+                    "Mask prediction:",
+                    prediction
+                )
+
+                # ------------------------------------------------
+                # Handle common model output shapes.
+                # ------------------------------------------------
+
+                if prediction.ndim == 2:
+
+                    values = prediction[0]
+
+                else:
+
+                    values = prediction.flatten()
+
+                if len(values) >= 2:
+
+                    mask_val = float(
+                        values[0]
+                    )
+
+                    no_mask_val = float(
+                        values[1]
+                    )
+
+                    if mask_val > no_mask_val:
+
+                        mask = "Mask"
+
+                    else:
+
+                        mask = "No Mask"
+
+                elif len(values) == 1:
+
+                    value = float(
+                        values[0]
+                    )
+
+                    # Binary sigmoid output.
+                    mask = (
+                        "Mask"
+                        if value >= 0.5
+                        else "No Mask"
+                    )
+
+                else:
+
+                    mask = "Unknown"
+
+            except Exception as e:
+
+                print(
+                    "MASK DETECTION ERROR:",
+                    repr(e)
+                )
+
+                mask = "Unknown"
+
+        print(
+            "MASK:",
+            mask
         )
 
         # ----------------------------------------------------
-        # EMOTION
+        # STEP 5 — EMOTION
         # ----------------------------------------------------
 
         emotion = detect_emotion(
@@ -1550,11 +1302,10 @@ async def analyze(
         )
 
         # ----------------------------------------------------
-        # RESPONSE MESSAGE
+        # MESSAGE / MUSIC / EMAIL
         # ----------------------------------------------------
 
         message = ""
-
         music = []
 
         if emotion == "happy":
@@ -1583,39 +1334,29 @@ async def analyze(
             else:
 
                 message = (
-                    "Fear detected, "
-                    "but the guardian email "
-                    "could not be sent."
+                    "Fear detected. "
+                    "Guardian email could not be sent."
                 )
 
         elif emotion == "angry":
 
             music = get_peace_songs()
 
-            print(
-                "Music:",
-                music
-            )
-
             message = (
                 "You seem angry. "
-                "Please relax and listen "
-                "to peaceful music."
+                "Please relax and listen to peaceful music."
             )
 
         elif emotion == "surprise":
 
             message = (
-                "You seem surprised. "
-                "Take a moment to understand "
-                "what happened."
+                "You look surprised!"
             )
 
         elif emotion == "disgust":
 
             message = (
-                "You seem uncomfortable. "
-                "Take a short break if needed."
+                "You seem uncomfortable."
             )
 
         else:
@@ -1634,7 +1375,7 @@ async def analyze(
         )
 
         # ----------------------------------------------------
-        # ANALYTICS
+        # UPDATE ANALYTICS
         # ----------------------------------------------------
 
         update_analytics(
@@ -1652,100 +1393,130 @@ async def analyze(
         )
 
         # ----------------------------------------------------
-        # SUCCESS RESPONSE
+        # FINAL RESPONSE
         # ----------------------------------------------------
 
-        result = {
+        analytics = load_analytics()
+
+        response = {
 
             "success": True,
 
-            "age":
-                age,
+            "age": age,
 
-            "smile":
-                smile,
+            "smile": smile,
 
-            "mask":
-                mask,
+            "mask": mask,
 
-            "emotion":
-                emotion,
+            "emotion": emotion,
 
-            "message":
-                message,
+            "message": message,
 
-            "music":
-                music,
+            "music": music,
 
-            "speech_text":
-                speech_text,
+            "speech_text": speech_text,
 
-            "image_path":
-                image_path,
+            "image_path": image_path,
 
-            "analytics":
-                load_analytics()
+            "analytics": analytics
+
         }
 
-        print()
         print(
-            "ANALYZE SUCCESS"
+            "ANALYSIS COMPLETED SUCCESSFULLY."
         )
 
         print(
-            result
+            "Result:",
+            {
+                "age": age,
+                "smile": smile,
+                "mask": mask,
+                "emotion": emotion
+            }
         )
 
-        print("=" * 60)
+        print(
+            "============================================================"
+        )
 
-        return result
+        return response
+
+    # --------------------------------------------------------
+    # Unexpected application error
+    # --------------------------------------------------------
 
     except Exception as e:
 
-        print()
-        print("=" * 60)
-        print("ANALYZE ERROR")
-        print("=" * 60)
+        print("")
+        print(
+            "============================================================"
+        )
+        print(
+            "ANALYZE ERROR"
+        )
+        print(
+            "============================================================"
+        )
 
         print(
+            "ERROR TYPE:",
             type(e).__name__
         )
 
         print(
-            str(e)
+            "ERROR:",
+            repr(e)
         )
 
-        print("=" * 60)
-
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error":
-                    "Analysis failed",
-                "details":
-                    str(e)
-            }
+        print(
+            "============================================================"
         )
 
+        return {
+            "success": False,
+            "error": (
+                "Image analysis failed. "
+                "Please check the Render logs for details."
+            ),
+            "error_type": type(e).__name__
+        }
 
-# ============================================================
-# RUN DIRECTLY
-# ============================================================
 
-if __name__ == "__main__":
+# ------------------------------------------------------------
+# MODELS STATUS
+# ------------------------------------------------------------
 
-    import uvicorn
+@app.get("/models")
+def models_status():
 
-    port = int(
-        os.getenv(
-            "PORT",
-            "8000"
-        )
-    )
+    return {
 
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port
-    )
+        "face_detection":
+            FACE_DETECTION_AVAILABLE,
+
+        "age_detection":
+            AGE_DETECTION_AVAILABLE,
+
+        "smile_detection":
+            SMILE_DETECTION_AVAILABLE,
+
+        "mask_detection":
+            MASK_DETECTION_AVAILABLE,
+
+        "emotion_detection":
+            ENABLE_DEEPFACE,
+
+        "emotion_note":
+            (
+                "DeepFace emotion detection is enabled."
+                if ENABLE_DEEPFACE
+                else
+                "Emotion detection is temporarily set to neutral "
+                "for Render deployment stability."
+            ),
+
+        "api_status":
+            "ready"
+
+    }
