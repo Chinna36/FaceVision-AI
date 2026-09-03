@@ -1,10 +1,14 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 import cv2
 import json
 import os
+import sqlite3
+import hashlib
+import secrets
+import uuid
 import random
 import datetime
 import smtplib
@@ -13,6 +17,7 @@ import tempfile
 import numpy as np
 
 from pathlib import Path
+from pydantic import BaseModel
 from email.message import EmailMessage
 
 from dotenv import load_dotenv
@@ -1520,3 +1525,251 @@ def models_status():
             "ready"
 
     }
+
+
+# ============================================================
+# AUTHENTICATION
+# ============================================================
+
+AUTH_DB = "users.db"
+
+
+def get_db():
+    conn = sqlite3.connect(AUTH_DB)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_auth_db():
+    conn = get_db()
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            full_name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            guardian_email TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def hash_password(password: str) -> str:
+    """
+    Securely hash a password using PBKDF2-HMAC-SHA256.
+    """
+    salt = secrets.token_bytes(16)
+
+    password_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt,
+        310000
+    )
+
+    return (
+        salt.hex()
+        + "$"
+        + password_hash.hex()
+    )
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """
+    Verify a password against the stored PBKDF2 hash.
+    """
+
+    try:
+        salt_hex, hash_hex = stored_hash.split("$")
+
+        salt = bytes.fromhex(salt_hex)
+
+        expected_hash = bytes.fromhex(hash_hex)
+
+        actual_hash = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            310000
+        )
+
+        return secrets.compare_digest(
+            actual_hash,
+            expected_hash
+        )
+
+    except Exception:
+        return False
+
+
+class RegisterRequest(BaseModel):
+    fullName: str
+    email: str
+    password: str
+    guardianEmail: str | None = None
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+# Initialize authentication database
+init_auth_db()
+
+
+# ============================================================
+# REGISTER
+# ============================================================
+
+@app.post("/register")
+def register_user(data: RegisterRequest):
+
+    full_name = data.fullName.strip()
+    email = data.email.strip().lower()
+    password = data.password
+
+    guardian_email = (
+        data.guardianEmail.strip().lower()
+        if data.guardianEmail
+        else None
+    )
+
+    if len(full_name) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Full name must be at least 2 characters."
+        )
+
+    if len(password) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 6 characters."
+        )
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email is required."
+        )
+
+    conn = get_db()
+
+    try:
+
+        existing_user = conn.execute(
+            """
+            SELECT id
+            FROM users
+            WHERE email = ?
+            """,
+            (email,)
+        ).fetchone()
+
+        if existing_user:
+            raise HTTPException(
+                status_code=409,
+                detail="An account with this email already exists."
+            )
+
+        user_id = str(uuid.uuid4())
+
+        password_hash = hash_password(password)
+
+        created_at = datetime.datetime.utcnow().isoformat()
+
+        conn.execute(
+            """
+            INSERT INTO users
+            (
+                id,
+                full_name,
+                email,
+                password_hash,
+                guardian_email,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                full_name,
+                email,
+                password_hash,
+                guardian_email,
+                created_at
+            )
+        )
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "message": "Account created successfully.",
+            "user": {
+                "id": user_id,
+                "fullName": full_name,
+                "email": email,
+                "guardianEmail": guardian_email
+            }
+        }
+
+    finally:
+        conn.close()
+
+
+# ============================================================
+# LOGIN
+# ============================================================
+
+@app.post("/login")
+def login_user(data: LoginRequest):
+
+    email = data.email.strip().lower()
+    password = data.password
+
+    conn = get_db()
+
+    try:
+
+        user = conn.execute(
+            """
+            SELECT *
+            FROM users
+            WHERE email = ?
+            """,
+            (email,)
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid email or password."
+            )
+
+        if not verify_password(
+            password,
+            user["password_hash"]
+        ):
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid email or password."
+            )
+
+        return {
+            "success": True,
+            "message": "Login successful.",
+            "user": {
+                "id": user["id"],
+                "fullName": user["full_name"],
+                "email": user["email"],
+                "guardianEmail": user["guardian_email"]
+            }
+        }
+
+    finally:
+        conn.close()
