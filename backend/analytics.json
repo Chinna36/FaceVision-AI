@@ -1,13 +1,13 @@
 {
-    "smile_count": 113,
-    "mask_count": 43,
+    "smile_count": 114,
+    "mask_count": 45,
     "emotion_count": {
         "sad": 56,
-        "neutral": 93,
+        "neutral": 97,
         "angry": 42,
-        "happy": 51,
-        "fear": 9,
+        "happy": 52,
+        "fear": 10,
         "surprise": 3
     },
-    "emotion_total": 254
+    "emotion_total": 260
 }
