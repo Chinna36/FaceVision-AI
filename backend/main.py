@@ -1657,6 +1657,15 @@ class LoginRequest(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     email: str
 
+class VerifyResetCodeRequest(BaseModel):
+    email: str
+    code: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    newPassword: str
 # Initialize authentication database
 init_auth_db()
 
@@ -1893,6 +1902,216 @@ def forgot_password(data: ForgotPasswordRequest):
         return {
             "success": True,
             "message": "Password reset code sent to your email."
+        }
+
+    finally:
+        conn.close()
+
+@app.post("/verify-reset-code")
+def verify_reset_code(data: VerifyResetCodeRequest):
+    email = data.email.strip().lower()
+    code = data.code.strip()
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email is required."
+        )
+
+    if not code or len(code) != 6 or not code.isdigit():
+        raise HTTPException(
+            status_code=400,
+            detail="Reset code must be a 6-digit number."
+        )
+
+    conn = get_db()
+
+    try:
+        user = conn.execute(
+            """
+            SELECT id
+            FROM users
+            WHERE email = ?
+            """,
+            (email,)
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="No account was found with this email."
+            )
+
+        reset = conn.execute(
+            """
+            SELECT id, code_hash, expires_at, used
+            FROM password_resets
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user["id"],)
+        ).fetchone()
+
+        if not reset:
+            raise HTTPException(
+                status_code=400,
+                detail="No password reset request was found."
+            )
+
+        if reset["used"]:
+            raise HTTPException(
+                status_code=400,
+                detail="This reset code has already been used."
+            )
+
+        expires_at = datetime.datetime.fromisoformat(
+            reset["expires_at"]
+        )
+
+        if datetime.datetime.utcnow() > expires_at:
+            raise HTTPException(
+                status_code=400,
+                detail="This reset code has expired."
+            )
+
+        code_hash = hashlib.sha256(
+            code.encode("utf-8")
+        ).hexdigest()
+
+        if not secrets.compare_digest(
+            code_hash,
+            reset["code_hash"]
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid reset code."
+            )
+
+        return {
+            "success": True,
+            "message": "Reset code verified successfully."
+        }
+
+    finally:
+        conn.close()
+
+@app.post("/reset-password")
+def reset_password(data: ResetPasswordRequest):
+    email = data.email.strip().lower()
+    code = data.code.strip()
+    new_password = data.newPassword
+
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="Email is required."
+        )
+
+    if not code or len(code) != 6 or not code.isdigit():
+        raise HTTPException(
+            status_code=400,
+            detail="Reset code must be a 6-digit number."
+        )
+
+    if len(new_password) < 6:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 6 characters."
+        )
+
+    conn = get_db()
+
+    try:
+        user = conn.execute(
+            """
+            SELECT id
+            FROM users
+            WHERE email = ?
+            """,
+            (email,)
+        ).fetchone()
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail="No account was found with this email."
+            )
+
+        reset = conn.execute(
+            """
+            SELECT id, code_hash, expires_at, used
+            FROM password_resets
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user["id"],)
+        ).fetchone()
+
+        if not reset:
+            raise HTTPException(
+                status_code=400,
+                detail="No password reset request was found."
+            )
+
+        if reset["used"]:
+            raise HTTPException(
+                status_code=400,
+                detail="This reset code has already been used."
+            )
+
+        expires_at = datetime.datetime.fromisoformat(
+            reset["expires_at"]
+        )
+
+        if datetime.datetime.utcnow() > expires_at:
+            raise HTTPException(
+                status_code=400,
+                detail="This reset code has expired."
+            )
+
+        code_hash = hashlib.sha256(
+            code.encode("utf-8")
+        ).hexdigest()
+
+        if not secrets.compare_digest(
+            code_hash,
+            reset["code_hash"]
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid reset code."
+            )
+
+        password_hash = hash_password(new_password)
+
+        conn.execute(
+            """
+            UPDATE users
+            SET password_hash = ?
+            WHERE id = ?
+            """,
+            (
+                password_hash,
+                user["id"]
+            )
+        )
+
+        conn.execute(
+            """
+            UPDATE password_resets
+            SET used = 1
+            WHERE id = ?
+            """,
+            (reset["id"],)
+        )
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "message": "Password reset successfully."
         }
 
     finally:
