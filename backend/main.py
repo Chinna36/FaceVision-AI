@@ -6,6 +6,8 @@ import cv2
 import json
 import os
 import sqlite3
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import hashlib
 import secrets
 import uuid
@@ -1532,36 +1534,145 @@ def models_status():
 # ============================================================
 
 AUTH_DB = "users.db"
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+print(
+    "AUTH DATABASE:",
+    "SUPABASE POSTGRES" if DATABASE_URL else "LOCAL SQLITE"
+)
+
+
+class PostgresDB:
+    """
+    Small wrapper so the rest of the authentication code
+    can continue using conn.execute(), conn.commit(),
+    and conn.close() just like SQLite.
+    """
+
+    def __init__(self, database_url):
+        self.conn = psycopg2.connect(
+            database_url,
+            cursor_factory=RealDictCursor
+        )
+
+    def execute(self, query, params=None):
+        cursor = self.conn.cursor()
+        cursor.execute(query, params or ())
+        return cursor
+
+    def commit(self):
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+
+
+class SQLiteDB:
+    """
+    Small wrapper for SQLite so the authentication code
+    can use the same %s placeholders as PostgreSQL.
+    """
+
+    def __init__(self, database_path):
+        self.conn = sqlite3.connect(database_path)
+        self.conn.row_factory = sqlite3.Row
+
+    def execute(self, query, params=None):
+        # PostgreSQL uses %s, SQLite uses ?
+        sqlite_query = query.replace("%s", "?")
+
+        cursor = self.conn.cursor()
+        cursor.execute(sqlite_query, params or ())
+        return cursor
+
+    def commit(self):
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
 
 
 def get_db():
-    conn = sqlite3.connect(AUTH_DB)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """
+    Use Supabase PostgreSQL in production.
+    Use SQLite for local development.
+    """
+
+    if DATABASE_URL:
+        return PostgresDB(DATABASE_URL)
+
+    return SQLiteDB(AUTH_DB)
 
 
 def init_auth_db():
     conn = get_db()
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS password_resets (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id TEXT NOT NULL,
-        code_hash TEXT NOT NULL,
-        expires_at TEXT NOT NULL,
-        used INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL
-        )
-    """)
+    try:
+        if DATABASE_URL:
+            # ==========================================
+            # SUPABASE / POSTGRESQL
+            # ==========================================
 
-    conn.commit()
-    conn.close()
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    full_name TEXT NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    guardian_email TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS password_resets (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    code_hash TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
+        else:
+            # ==========================================
+            # SQLITE FOR LOCAL DEVELOPMENT
+            # ==========================================
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    full_name TEXT NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    guardian_email TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS password_resets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    code_hash TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
+        conn.commit()
+
+    finally:
+        conn.close()
 
 
 def hash_password(password: str) -> str:
     """
     Securely hash a password using PBKDF2-HMAC-SHA256.
     """
+
     salt = secrets.token_bytes(16)
 
     password_hash = hashlib.pbkdf2_hmac(
@@ -1587,7 +1698,6 @@ def verify_password(password: str, stored_hash: str) -> bool:
         salt_hex, hash_hex = stored_hash.split("$")
 
         salt = bytes.fromhex(salt_hex)
-
         expected_hash = bytes.fromhex(hash_hex)
 
         actual_hash = hashlib.pbkdf2_hmac(
@@ -1605,13 +1715,16 @@ def verify_password(password: str, stored_hash: str) -> bool:
     except Exception:
         return False
 
+
 def send_reset_email(to_email: str, reset_code: str):
     smtp_email = os.getenv("SMTP_EMAIL")
     smtp_password = os.getenv("SMTP_PASSWORD")
     smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
 
     if not smtp_email or not smtp_password:
-        raise RuntimeError("SMTP email configuration is missing.")
+        raise RuntimeError(
+            "SMTP email configuration is missing."
+        )
 
     message = EmailMessage()
 
@@ -1643,6 +1756,7 @@ FaceVision AI
         server.login(smtp_email, smtp_password)
         server.send_message(message)
 
+
 class RegisterRequest(BaseModel):
     fullName: str
     email: str
@@ -1654,8 +1768,10 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+
 class ForgotPasswordRequest(BaseModel):
     email: str
+
 
 class VerifyResetCodeRequest(BaseModel):
     email: str
@@ -1666,6 +1782,8 @@ class ResetPasswordRequest(BaseModel):
     email: str
     code: str
     newPassword: str
+
+
 # Initialize authentication database
 init_auth_db()
 
@@ -1713,7 +1831,7 @@ def register_user(data: RegisterRequest):
             """
             SELECT id
             FROM users
-            WHERE email = ?
+            WHERE email = %s
             """,
             (email,)
         ).fetchone()
@@ -1741,7 +1859,7 @@ def register_user(data: RegisterRequest):
                 guardian_email,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (
                 user_id,
@@ -1788,7 +1906,7 @@ def login_user(data: LoginRequest):
             """
             SELECT *
             FROM users
-            WHERE email = ?
+            WHERE email = %s
             """,
             (email,)
         ).fetchone()
@@ -1822,8 +1940,14 @@ def login_user(data: LoginRequest):
     finally:
         conn.close()
 
+
+# ============================================================
+# FORGOT PASSWORD
+# ============================================================
+
 @app.post("/forgot-password")
 def forgot_password(data: ForgotPasswordRequest):
+
     email = data.email.strip().lower()
 
     if not email:
@@ -1835,11 +1959,12 @@ def forgot_password(data: ForgotPasswordRequest):
     conn = get_db()
 
     try:
+
         user = conn.execute(
             """
             SELECT id, email
             FROM users
-            WHERE email = ?
+            WHERE email = %s
             """,
             (email,)
         ).fetchone()
@@ -1850,26 +1975,30 @@ def forgot_password(data: ForgotPasswordRequest):
                 detail="No account was found with this email."
             )
 
-        # Invalidate any previous unused reset codes
+        # Invalidate previous unused reset codes
         conn.execute(
             """
             UPDATE password_resets
             SET used = 1
-            WHERE user_id = ? AND used = 0
+            WHERE user_id = %s
+            AND used = 0
             """,
             (user["id"],)
         )
 
-        # Generate a 6-digit code
+        # Generate 6-digit code
         reset_code = f"{secrets.randbelow(1000000):06d}"
 
-        # Hash the code before storing it
+        # Hash code before storing
         code_hash = hashlib.sha256(
             reset_code.encode("utf-8")
         ).hexdigest()
 
         now = datetime.datetime.utcnow()
-        expires_at = now + datetime.timedelta(minutes=10)
+
+        expires_at = now + datetime.timedelta(
+            minutes=10
+        )
 
         conn.execute(
             """
@@ -1881,7 +2010,7 @@ def forgot_password(data: ForgotPasswordRequest):
                 used,
                 created_at
             )
-            VALUES (?, ?, ?, 0, ?)
+            VALUES (%s, %s, %s, 0, %s)
             """,
             (
                 user["id"],
@@ -1893,7 +2022,7 @@ def forgot_password(data: ForgotPasswordRequest):
 
         conn.commit()
 
-        # Send the actual code to the user's email
+        # Send reset code to email
         send_reset_email(
             user["email"],
             reset_code
@@ -1907,8 +2036,14 @@ def forgot_password(data: ForgotPasswordRequest):
     finally:
         conn.close()
 
+
+# ============================================================
+# VERIFY RESET CODE
+# ============================================================
+
 @app.post("/verify-reset-code")
 def verify_reset_code(data: VerifyResetCodeRequest):
+
     email = data.email.strip().lower()
     code = data.code.strip()
 
@@ -1927,11 +2062,12 @@ def verify_reset_code(data: VerifyResetCodeRequest):
     conn = get_db()
 
     try:
+
         user = conn.execute(
             """
             SELECT id
             FROM users
-            WHERE email = ?
+            WHERE email = %s
             """,
             (email,)
         ).fetchone()
@@ -1946,7 +2082,7 @@ def verify_reset_code(data: VerifyResetCodeRequest):
             """
             SELECT id, code_hash, expires_at, used
             FROM password_resets
-            WHERE user_id = ?
+            WHERE user_id = %s
             ORDER BY id DESC
             LIMIT 1
             """,
@@ -1996,8 +2132,14 @@ def verify_reset_code(data: VerifyResetCodeRequest):
     finally:
         conn.close()
 
+
+# ============================================================
+# RESET PASSWORD
+# ============================================================
+
 @app.post("/reset-password")
 def reset_password(data: ResetPasswordRequest):
+
     email = data.email.strip().lower()
     code = data.code.strip()
     new_password = data.newPassword
@@ -2023,11 +2165,12 @@ def reset_password(data: ResetPasswordRequest):
     conn = get_db()
 
     try:
+
         user = conn.execute(
             """
             SELECT id
             FROM users
-            WHERE email = ?
+            WHERE email = %s
             """,
             (email,)
         ).fetchone()
@@ -2042,7 +2185,7 @@ def reset_password(data: ResetPasswordRequest):
             """
             SELECT id, code_hash, expires_at, used
             FROM password_resets
-            WHERE user_id = ?
+            WHERE user_id = %s
             ORDER BY id DESC
             LIMIT 1
             """,
@@ -2089,8 +2232,8 @@ def reset_password(data: ResetPasswordRequest):
         conn.execute(
             """
             UPDATE users
-            SET password_hash = ?
-            WHERE id = ?
+            SET password_hash = %s
+            WHERE id = %s
             """,
             (
                 password_hash,
@@ -2102,7 +2245,7 @@ def reset_password(data: ResetPasswordRequest):
             """
             UPDATE password_resets
             SET used = 1
-            WHERE id = ?
+            WHERE id = %s
             """,
             (reset["id"],)
         )
