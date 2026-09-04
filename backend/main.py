@@ -1717,44 +1717,111 @@ def verify_password(password: str, stored_hash: str) -> bool:
 
 
 def send_reset_email(to_email: str, reset_code: str):
-    smtp_email = os.getenv("SMTP_EMAIL")
-    smtp_password = os.getenv("SMTP_PASSWORD")
-    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-
-    if not smtp_email or not smtp_password:
-        raise RuntimeError(
-            "SMTP email configuration is missing."
-        )
-
-    message = EmailMessage()
-
-    message["Subject"] = "FaceVision AI - Password Reset Code"
-    message["From"] = smtp_email
-    message["To"] = to_email
-
-    message.set_content(
-        f"""
-Hello,
-
-We received a request to reset your FaceVision AI password.
-
-Your password reset code is:
-
-{reset_code}
-
-This code will expire in 10 minutes.
-
-If you did not request a password reset, you can safely ignore this email.
-
-Regards,
-FaceVision AI
-"""
+    resend_api_key = os.getenv("RESEND_API_KEY")
+    resend_from_email = os.getenv(
+        "RESEND_FROM_EMAIL",
+        "FaceVision AI <onboarding@resend.dev>"
     )
 
-    with smtplib.SMTP(smtp_host, 587) as server:
-        server.starttls()
-        server.login(smtp_email, smtp_password)
-        server.send_message(message)
+    if not resend_api_key:
+        raise RuntimeError(
+            "RESEND_API_KEY is not configured."
+        )
+
+    import resend
+
+    resend.api_key = resend_api_key
+
+    html_body = f"""
+    <div style="
+        font-family: Arial, sans-serif;
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 30px;
+        background-color: #f8fafc;
+    ">
+        <div style="
+            background-color: white;
+            border-radius: 12px;
+            padding: 30px;
+            border: 1px solid #e2e8f0;
+        ">
+            <h2 style="
+                color: #2563eb;
+                margin-bottom: 20px;
+            ">
+                FaceVision AI
+            </h2>
+
+            <p>
+                Hello,
+            </p>
+
+            <p>
+                We received a request to reset your
+                FaceVision AI password.
+            </p>
+
+            <p>
+                Your password reset code is:
+            </p>
+
+            <div style="
+                font-size: 32px;
+                font-weight: bold;
+                letter-spacing: 8px;
+                text-align: center;
+                padding: 20px;
+                margin: 20px 0;
+                background-color: #eff6ff;
+                color: #1d4ed8;
+                border-radius: 10px;
+            ">
+                {reset_code}
+            </div>
+
+            <p>
+                This code will expire in
+                <strong>10 minutes</strong>.
+            </p>
+
+            <p>
+                If you did not request a password reset,
+                you can safely ignore this email.
+            </p>
+
+            <p style="margin-top: 30px;">
+                Regards,<br>
+                <strong>FaceVision AI</strong>
+            </p>
+        </div>
+    </div>
+    """
+
+    try:
+        email = resend.Emails.send({
+            "from": resend_from_email,
+            "to": [to_email],
+            "subject": "FaceVision AI - Password Reset Code",
+            "html": html_body,
+        })
+
+        print(
+            "RESET EMAIL SENT:",
+            to_email,
+            email
+        )
+
+        return email
+
+    except Exception as e:
+        print("RESEND EMAIL ERROR:")
+        print(type(e).__name__)
+        print(str(e))
+
+        raise RuntimeError(
+            "Unable to send password reset email."
+        )
 
 
 class RegisterRequest(BaseModel):
