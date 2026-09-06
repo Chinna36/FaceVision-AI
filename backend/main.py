@@ -196,51 +196,56 @@ SAD_JOKES = [
 
 def send_alert_email():
 
-    if not SENDER_EMAIL or not SENDER_PASSWORD or not GUARDIAN_EMAIL:
+    resend_api_key = os.getenv("RESEND_API_KEY")
+    guardian_email = os.getenv("GUARDIAN_EMAIL")
 
-        print("EMAIL ERROR: Email environment variables are not configured.")
+    resend_from_email = os.getenv(
+        "RESEND_FROM_EMAIL",
+        "FaceVision AI <onboarding@resend.dev>"
+    )
 
+    if not resend_api_key or not guardian_email:
+        print(
+            "EMAIL ERROR: RESEND_API_KEY or GUARDIAN_EMAIL "
+            "is not configured."
+        )
         return False
 
     try:
 
-        msg = EmailMessage()
+        import resend
 
-        msg["Subject"] = "⚠ Fear Emotion Detected"
+        resend.api_key = resend_api_key
 
-        msg["From"] = SENDER_EMAIL
+        email = resend.Emails.send({
+            "from": resend_from_email,
+            "to": [guardian_email],
+            "subject": "⚠ Fear Emotion Detected",
+            "html": """
+                <h2>⚠ Fear Emotion Detected</h2>
 
-        msg["To"] = GUARDIAN_EMAIL
+                <p>
+                    Fear emotion was detected by
+                    <strong>FaceVision AI</strong>.
+                </p>
 
-        msg.set_content(
-            "Fear emotion detected by FaceVision AI. "
-            "Please check immediately."
-        )
-
-        with smtplib.SMTP_SSL(
-            "smtp.gmail.com",
-            465,
-            timeout=20
-        ) as smtp:
-
-            smtp.login(
-                SENDER_EMAIL,
-                SENDER_PASSWORD
-            )
-
-            smtp.send_message(msg)
+                <p>
+                    Please check immediately.
+                </p>
+            """
+        })
 
         print("ALERT EMAIL SENT SUCCESSFULLY.")
+        print("Resend response:", email)
 
         return True
 
     except Exception as e:
 
-        print("EMAIL ERROR:", str(e))
+        print("EMAIL ERROR TYPE:", type(e).__name__)
+        print("EMAIL ERROR:", repr(e))
 
         return False
-
-
 # ------------------------------------------------------------
 # PEACEFUL MUSIC
 # ------------------------------------------------------------
