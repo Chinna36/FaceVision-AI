@@ -38,6 +38,10 @@ GUARDIAN_EMAIL = os.getenv("GUARDIAN_EMAIL")
 # Change this to "true" later after the basic analysis works.
 ENABLE_DEEPFACE = os.getenv("ENABLE_DEEPFACE", "false").lower() == "true"
 
+# Mask detection is optional so Render can prioritize emotion recognition.
+# Keep the mask model/code in the project, but disable loading on Render with ENABLE_MASK=false.
+ENABLE_MASK = os.getenv("ENABLE_MASK", "true").lower() == "true"
+
 # ------------------------------------------------------------
 # FASTAPI APP
 # ------------------------------------------------------------
@@ -672,19 +676,25 @@ def load_mask_model():
     )
 
 
-try:
-
-    mask_model = load_mask_model()
-
-    MASK_DETECTION_AVAILABLE = True
-
-except Exception as e:
-
-    print(
-        "MASK MODEL ERROR:",
-        repr(e)
-    )
-
+if ENABLE_MASK:
+    try:
+        mask_model = load_mask_model()
+        MASK_DETECTION_AVAILABLE = True
+    except Exception as e:
+        print(
+            "MASK MODEL ERROR:",
+            repr(e)
+        )
+        mask_model = None
+else:
+    print("")
+    print("============================================================")
+    print("MASK DETECTION DISABLED")
+    print("============================================================")
+    print("ENABLE_MASK is false.")
+    print("Mask model will NOT be loaded.")
+    print("This saves memory for Render emotion recognition.")
+    print("============================================================")
     mask_model = None
 
 
@@ -713,7 +723,12 @@ print(
 )
 
 print(
-    "Mask detection:",
+    "Mask detection enabled:",
+    ENABLE_MASK
+)
+
+print(
+    "Mask detection available:",
     MASK_DETECTION_AVAILABLE
 )
 
@@ -750,12 +765,16 @@ AGE_LIST = [
 # EMOTION DETECTION
 # ------------------------------------------------------------
 
+# ------------------------------------------------------------
+# EMOTION DETECTION
+# ------------------------------------------------------------
+
 def detect_emotion(face):
 
     print("STEP 5: Emotion detection...")
 
     # --------------------------------------------------------
-    # Render stability mode
+    # Emotion detection disabled
     # --------------------------------------------------------
 
     if not ENABLE_DEEPFACE:
@@ -767,11 +786,7 @@ def detect_emotion(face):
         return "neutral"
 
     # --------------------------------------------------------
-    # Lazy import
-    #
-    # DeepFace is NOT imported during application startup.
-    # It is imported only when an analysis request actually
-    # needs emotion detection.
+    # Lazy DeepFace import
     # --------------------------------------------------------
 
     try:
@@ -780,15 +795,81 @@ def detect_emotion(face):
 
         from deepface import DeepFace
 
-        print("DeepFace imported successfully.")
+        print(
+            "DeepFace imported successfully."
+        )
+
+        # ----------------------------------------------------
+        # Validate face image
+        # ----------------------------------------------------
+
+        if face is None:
+
+            print(
+                "EMOTION ERROR: Face image is None."
+            )
+
+            return "neutral"
+
+        if not isinstance(face, np.ndarray):
+
+            print(
+                "EMOTION ERROR: Face is not a NumPy image."
+            )
+
+            return "neutral"
+
+        if face.size == 0:
+
+            print(
+                "EMOTION ERROR: Face image is empty."
+            )
+
+            return "neutral"
+
+        # ----------------------------------------------------
+        # Prepare face for DeepFace
+        #
+        # The face has already been detected by our
+        # OpenCV face detector, so DeepFace does not
+        # need to detect the face again.
+        # ----------------------------------------------------
+
+        emotion_face = face.copy()
+
+        print(
+            "Emotion face size:",
+            emotion_face.shape
+        )
+
+        # ----------------------------------------------------
+        # Run emotion analysis
+        # ----------------------------------------------------
 
         result = DeepFace.analyze(
-            img_path=face,
+
+            img_path=emotion_face,
+
             actions=["emotion"],
+
             enforce_detection=False,
+
             detector_backend="skip",
+
+            align=False,
+
             silent=True
+
         )
+
+        print(
+            "DeepFace raw result:",
+            result
+        )
+
+        # ----------------------------------------------------
+        # Extract result
+        # ----------------------------------------------------
 
         if isinstance(result, list):
 
@@ -803,18 +884,53 @@ def detect_emotion(face):
                     "neutral"
                 )
 
-        else:
+        elif isinstance(result, dict):
 
             emotion = result.get(
                 "dominant_emotion",
                 "neutral"
             )
 
+        else:
+
+            emotion = "neutral"
+
+        # ----------------------------------------------------
+        # Normalize emotion
+        # ----------------------------------------------------
+
         if not emotion:
 
             emotion = "neutral"
 
-        emotion = str(emotion).lower()
+        emotion = str(
+            emotion
+        ).strip().lower()
+
+        # ----------------------------------------------------
+        # Only allow supported emotions
+        # ----------------------------------------------------
+
+        allowed_emotions = {
+
+            "happy",
+            "sad",
+            "angry",
+            "fear",
+            "surprise",
+            "disgust",
+            "neutral"
+
+        }
+
+        if emotion not in allowed_emotions:
+
+            print(
+                "Unknown emotion returned:",
+                emotion
+            )
+
+            emotion = "neutral"
 
         print(
             "EMOTION:",
@@ -826,12 +942,22 @@ def detect_emotion(face):
     except Exception as e:
 
         print(
-            "DEEPFACE ERROR:",
+            "DEEPFACE ERROR:"
+        )
+
+        print(
+            "ERROR TYPE:",
+            type(e).__name__
+        )
+
+        print(
+            "ERROR:",
             repr(e)
         )
 
-        # Never allow emotion failure to break
-        # the complete image analysis.
+        # ----------------------------------------------------
+        # Emotion failure must NOT break the other AI models.
+        # ----------------------------------------------------
 
         return "neutral"
 
@@ -1202,9 +1328,11 @@ async def analyze(
             "STEP 4: Running mask detection..."
         )
 
-        mask = "Unknown"
-
-        if MASK_DETECTION_AVAILABLE:
+        if not ENABLE_MASK:
+            mask = "Disabled"
+            print("MASK: Disabled to save memory for emotion recognition.")
+        elif MASK_DETECTION_AVAILABLE:
+            mask = "Unknown"
 
             try:
 
@@ -1509,13 +1637,16 @@ def models_status():
             SMILE_DETECTION_AVAILABLE,
 
         "mask_detection":
-            MASK_DETECTION_AVAILABLE,
+            ENABLE_MASK and MASK_DETECTION_AVAILABLE,
 
         "emotion_detection":
             ENABLE_DEEPFACE,
 
         "emotion_note":
             (
+                "DeepFace emotion detection is enabled. Mask detection is disabled to reduce memory usage."
+                if ENABLE_DEEPFACE and not ENABLE_MASK
+                else
                 "DeepFace emotion detection is enabled."
                 if ENABLE_DEEPFACE
                 else
