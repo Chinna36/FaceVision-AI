@@ -196,32 +196,44 @@ SAD_JOKES = [
 
 def send_alert_email():
 
-    resend_api_key = os.getenv("RESEND_API_KEY")
+    brevo_api_key = os.getenv("BREVO_API_KEY")
     guardian_email = os.getenv("GUARDIAN_EMAIL")
+    sender_email = os.getenv("SENDER_EMAIL")
 
-    resend_from_email = os.getenv(
-        "RESEND_FROM_EMAIL",
-        "FaceVision AI <onboarding@resend.dev>"
-    )
-
-    if not resend_api_key or not guardian_email:
+    if not brevo_api_key or not guardian_email or not sender_email:
         print(
-            "EMAIL ERROR: RESEND_API_KEY or GUARDIAN_EMAIL "
+            "EMAIL ERROR: BREVO_API_KEY, "
+            "GUARDIAN_EMAIL, or SENDER_EMAIL "
             "is not configured."
         )
         return False
 
     try:
 
-        import resend
+        import sib_api_v3_sdk
+        from sib_api_v3_sdk.rest import ApiException
 
-        resend.api_key = resend_api_key
+        configuration = sib_api_v3_sdk.Configuration()
+        configuration.api_key["api-key"] = brevo_api_key
 
-        email = resend.Emails.send({
-            "from": resend_from_email,
-            "to": [guardian_email],
-            "subject": "⚠ Fear Emotion Detected",
-            "html": """
+        api_instance = sib_api_v3_sdk.TransactionalEmailsApi(
+            sib_api_v3_sdk.ApiClient(configuration)
+        )
+
+        sender = sib_api_v3_sdk.SendSmtpEmailSender(
+            email=sender_email,
+            name="FaceVision AI"
+        )
+
+        recipient = sib_api_v3_sdk.SendSmtpEmailTo(
+            email=guardian_email
+        )
+
+        email_data = sib_api_v3_sdk.SendSmtpEmail(
+            sender=sender,
+            to=[recipient],
+            subject="⚠ Fear Emotion Detected",
+            html_content="""
                 <h2>⚠ Fear Emotion Detected</h2>
 
                 <p>
@@ -233,10 +245,12 @@ def send_alert_email():
                     Please check immediately.
                 </p>
             """
-        })
+        )
+
+        response = api_instance.send_transac_email(email_data)
 
         print("ALERT EMAIL SENT SUCCESSFULLY.")
-        print("Resend response:", email)
+        print("Brevo response:", response)
 
         return True
 
