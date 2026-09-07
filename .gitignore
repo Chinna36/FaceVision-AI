@@ -5,6 +5,25 @@ backend/venv310/
 backend/env/
 backend/.env
 
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Environment/secrets
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
 # Python cache
 __pycache__/
 *.pyc
