@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -194,24 +194,21 @@ SAD_JOKES = [
 # EMAIL ALERT
 # ------------------------------------------------------------
 
-def send_alert_email():
+def send_alert_email(guardian_email: str):
 
     brevo_api_key = os.getenv("BREVO_API_KEY")
-    guardian_email = os.getenv("GUARDIAN_EMAIL")
     sender_email = os.getenv("SENDER_EMAIL")
 
-    if not brevo_api_key or not guardian_email or not sender_email:
+    if not brevo_api_key or not sender_email or not guardian_email:
         print(
-            "EMAIL ERROR: BREVO_API_KEY, "
-            "GUARDIAN_EMAIL, or SENDER_EMAIL "
-            "is not configured."
+            "EMAIL ERROR: BREVO_API_KEY, SENDER_EMAIL, "
+            "or the user's guardian email is not configured."
         )
         return False
 
     try:
 
         import sib_api_v3_sdk
-        from sib_api_v3_sdk.rest import ApiException
 
         configuration = sib_api_v3_sdk.Configuration()
         configuration.api_key["api-key"] = brevo_api_key
@@ -235,21 +232,20 @@ def send_alert_email():
             subject="⚠ Fear Emotion Detected",
             html_content="""
                 <h2>⚠ Fear Emotion Detected</h2>
-
                 <p>
                     Fear emotion was detected by
                     <strong>FaceVision AI</strong>.
                 </p>
-
-                <p>
-                    Please check immediately.
-                </p>
+                <p>Please check immediately.</p>
             """
         )
 
         response = api_instance.send_transac_email(email_data)
 
-        print("ALERT EMAIL SENT SUCCESSFULLY.")
+        print(
+            "ALERT EMAIL SENT SUCCESSFULLY TO GUARDIAN:",
+            guardian_email
+        )
         print("Brevo response:", response)
 
         return True
@@ -260,6 +256,67 @@ def send_alert_email():
         print("EMAIL ERROR:", repr(e))
 
         return False
+
+
+def get_guardian_email_for_user(user_email: str | None):
+
+    if not user_email:
+        print(
+            "GUARDIAN LOOKUP ERROR: No user email was supplied "
+            "with the analyze request."
+        )
+        return None
+
+    normalized_email = user_email.strip().lower()
+
+    if not normalized_email:
+        return None
+
+    conn = get_db()
+
+    try:
+
+        user = conn.execute(
+            """
+            SELECT guardian_email
+            FROM users
+            WHERE email = %s
+            """,
+            (normalized_email,)
+        ).fetchone()
+
+        if not user:
+            print(
+                "GUARDIAN LOOKUP ERROR: User not found:",
+                normalized_email
+            )
+            return None
+
+        guardian_email = user["guardian_email"]
+
+        if guardian_email:
+            guardian_email = guardian_email.strip().lower()
+
+        print(
+            "GUARDIAN EMAIL LOOKED UP FOR USER:",
+            normalized_email,
+            "->",
+            guardian_email
+        )
+
+        return guardian_email
+
+    except Exception as e:
+
+        print("GUARDIAN LOOKUP ERROR TYPE:", type(e).__name__)
+        print("GUARDIAN LOOKUP ERROR:", repr(e))
+
+        return None
+
+    finally:
+        conn.close()
+
+
 # ------------------------------------------------------------
 # PEACEFUL MUSIC
 # ------------------------------------------------------------
@@ -1048,7 +1105,8 @@ def get_safe_face_box(
 
 @app.post("/analyze")
 async def analyze(
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    user_email: str | None = Form(None)
 ):
 
     print("")
@@ -1057,6 +1115,10 @@ async def analyze(
     print("============================================================")
 
     try:
+
+        # Get this logged-in user's guardian from the database.
+        guardian_email = get_guardian_email_for_user(user_email)
+
 
         # ----------------------------------------------------
         # Validate upload
@@ -1476,7 +1538,11 @@ async def analyze(
 
         elif emotion == "fear":
 
-            email_sent = send_alert_email()
+            email_sent = (
+                send_alert_email(guardian_email)
+                if guardian_email
+                else False
+            )
 
             if email_sent:
 
