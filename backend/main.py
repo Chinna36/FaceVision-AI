@@ -1867,107 +1867,131 @@ def verify_password(password: str, stored_hash: str) -> bool:
 
 
 def send_reset_email(to_email: str, reset_code: str):
-    resend_api_key = os.getenv("RESEND_API_KEY")
-    resend_from_email = os.getenv(
-        "RESEND_FROM_EMAIL",
-        "FaceVision AI <onboarding@resend.dev>"
-    )
 
-    if not resend_api_key:
+    brevo_api_key = os.getenv("BREVO_API_KEY")
+    sender_email = os.getenv("SENDER_EMAIL")
+
+    if not brevo_api_key or not sender_email:
         raise RuntimeError(
-            "RESEND_API_KEY is not configured."
+            "BREVO_API_KEY or SENDER_EMAIL is not configured."
         )
-
-    import resend
-
-    resend.api_key = resend_api_key
-
-    html_body = f"""
-    <div style="
-        font-family: Arial, sans-serif;
-        max-width: 600px;
-        margin: 0 auto;
-        padding: 30px;
-        background-color: #f8fafc;
-    ">
-        <div style="
-            background-color: white;
-            border-radius: 12px;
-            padding: 30px;
-            border: 1px solid #e2e8f0;
-        ">
-            <h2 style="
-                color: #2563eb;
-                margin-bottom: 20px;
-            ">
-                FaceVision AI
-            </h2>
-
-            <p>
-                Hello,
-            </p>
-
-            <p>
-                We received a request to reset your
-                FaceVision AI password.
-            </p>
-
-            <p>
-                Your password reset code is:
-            </p>
-
-            <div style="
-                font-size: 32px;
-                font-weight: bold;
-                letter-spacing: 8px;
-                text-align: center;
-                padding: 20px;
-                margin: 20px 0;
-                background-color: #eff6ff;
-                color: #1d4ed8;
-                border-radius: 10px;
-            ">
-                {reset_code}
-            </div>
-
-            <p>
-                This code will expire in
-                <strong>10 minutes</strong>.
-            </p>
-
-            <p>
-                If you did not request a password reset,
-                you can safely ignore this email.
-            </p>
-
-            <p style="margin-top: 30px;">
-                Regards,<br>
-                <strong>FaceVision AI</strong>
-            </p>
-        </div>
-    </div>
-    """
 
     try:
-        email = resend.Emails.send({
-            "from": resend_from_email,
-            "to": [to_email],
-            "subject": "FaceVision AI - Password Reset Code",
-            "html": html_body,
-        })
 
-        print(
-            "RESET EMAIL SENT:",
-            to_email,
-            email
+        import sib_api_v3_sdk
+
+        configuration = sib_api_v3_sdk.Configuration()
+        configuration.api_key["api-key"] = brevo_api_key
+
+        api_instance = sib_api_v3_sdk.TransactionalEmailsApi(
+            sib_api_v3_sdk.ApiClient(configuration)
         )
 
-        return email
+        sender = sib_api_v3_sdk.SendSmtpEmailSender(
+            email=sender_email,
+            name="FaceVision AI"
+        )
+
+        recipient = sib_api_v3_sdk.SendSmtpEmailTo(
+            email=to_email
+        )
+
+        html_body = f"""
+        <div style="
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 30px;
+            background-color: #f8fafc;
+        ">
+            <div style="
+                background-color: white;
+                border-radius: 12px;
+                padding: 30px;
+                border: 1px solid #e2e8f0;
+            ">
+
+                <h2 style="
+                    color: #2563eb;
+                    margin-bottom: 20px;
+                ">
+                    FaceVision AI
+                </h2>
+
+                <p>
+                    Hello,
+                </p>
+
+                <p>
+                    We received a request to reset your
+                    FaceVision AI password.
+                </p>
+
+                <p>
+                    Your password reset code is:
+                </p>
+
+                <div style="
+                    font-size: 32px;
+                    font-weight: bold;
+                    letter-spacing: 8px;
+                    text-align: center;
+                    padding: 20px;
+                    margin: 20px 0;
+                    background-color: #eff6ff;
+                    color: #1d4ed8;
+                    border-radius: 10px;
+                ">
+                    {reset_code}
+                </div>
+
+                <p>
+                    This code will expire in
+                    <strong>10 minutes</strong>.
+                </p>
+
+                <p>
+                    If you did not request a password reset,
+                    you can safely ignore this email.
+                </p>
+
+                <p style="margin-top: 30px;">
+                    Regards,<br>
+                    <strong>FaceVision AI</strong>
+                </p>
+
+            </div>
+        </div>
+        """
+
+        email_data = sib_api_v3_sdk.SendSmtpEmail(
+            sender=sender,
+            to=[recipient],
+            subject="FaceVision AI - Password Reset Code",
+            html_content=html_body
+        )
+
+        response = api_instance.send_transac_email(
+            email_data
+        )
+
+        print(
+            "RESET EMAIL SENT SUCCESSFULLY:",
+            to_email
+        )
+
+        print(
+            "Brevo response:",
+            response
+        )
+
+        return response
 
     except Exception as e:
-        print("RESEND EMAIL ERROR:")
-        print(type(e).__name__)
-        print(str(e))
+
+        print("BREVO RESET EMAIL ERROR:")
+        print("ERROR TYPE:", type(e).__name__)
+        print("ERROR:", repr(e))
 
         raise RuntimeError(
             "Unable to send password reset email."
