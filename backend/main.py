@@ -1613,6 +1613,23 @@ async def analyze(
         )
 
         # ----------------------------------------------------
+        # SAVE USER ANALYSIS HISTORY
+        # ----------------------------------------------------
+
+        history_saved = save_analysis_history(
+            user_email,
+            {
+                "age": age,
+                "smile": smile,
+                "mask": mask,
+                "emotion": emotion,
+                "image_path": image_path
+            }
+        )
+
+        print("HISTORY SAVED:", history_saved)
+
+        # ----------------------------------------------------
         # FINAL RESPONSE
         # ----------------------------------------------------
 
@@ -1746,6 +1763,33 @@ def models_status():
 
 
 # ============================================================
+# ANALYSIS HISTORY
+# ============================================================
+
+@app.get("/analysis-history")
+def analysis_history(user_email: str | None = None):
+    """Return analysis history and analytics for one account."""
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email is required.")
+    return {
+        "success": True,
+        "history": get_analysis_history(user_email),
+        "analytics": get_analysis_analytics(user_email)
+    }
+
+
+@app.get("/analysis-analytics")
+def analysis_analytics(user_email: str | None = None):
+    """Return analytics calculated from one account's history."""
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email is required.")
+    return {
+        "success": True,
+        "analytics": get_analysis_analytics(user_email)
+    }
+
+
+# ============================================================
 # AUTHENTICATION
 # ============================================================
 
@@ -1820,6 +1864,116 @@ def get_db():
     return SQLiteDB(AUTH_DB)
 
 
+def save_analysis_history(user_email: str | None, result: dict):
+    """Save one completed analysis for the user's account."""
+    if not user_email:
+        print("HISTORY SAVE: No user email supplied.")
+        return False
+
+    normalized_email = user_email.strip().lower()
+    if not normalized_email:
+        return False
+
+    conn = get_db()
+    try:
+        user = conn.execute(
+            """
+            SELECT id FROM users WHERE email = %s
+            """,
+            (normalized_email,)
+        ).fetchone()
+
+        if not user:
+            print("HISTORY SAVE: User not found:", normalized_email)
+            return False
+
+        conn.execute(
+            """
+            INSERT INTO analysis_history
+            (user_id, age, smile, mask, emotion, image_path, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                str(user["id"]), result.get("age"), result.get("smile"),
+                result.get("mask"), result.get("emotion"),
+                result.get("image_path"), datetime.datetime.utcnow().isoformat()
+            )
+        )
+        conn.commit()
+        print("HISTORY SAVE: Analysis saved successfully for:", normalized_email)
+        return True
+    except Exception as e:
+        print("HISTORY SAVE ERROR TYPE:", type(e).__name__)
+        print("HISTORY SAVE ERROR:", repr(e))
+        return False
+    finally:
+        conn.close()
+
+
+def get_analysis_history(user_email: str | None):
+    """Return only the requested user's analysis history."""
+    if not user_email:
+        return []
+    normalized_email = user_email.strip().lower()
+    if not normalized_email:
+        return []
+    conn = get_db()
+    try:
+        user = conn.execute(
+            """SELECT id FROM users WHERE email = %s""",
+            (normalized_email,)
+        ).fetchone()
+        if not user:
+            return []
+        rows = conn.execute(
+            """
+            SELECT id, age, smile, mask, emotion, image_path, created_at
+            FROM analysis_history
+            WHERE user_id = %s
+            ORDER BY created_at DESC, id DESC
+            """,
+            (str(user["id"]),)
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "age": row["age"],
+                "smile": row["smile"],
+                "mask": row["mask"],
+                "emotion": row["emotion"],
+                "image_path": row["image_path"],
+                "timestamp": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"])
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        print("HISTORY READ ERROR TYPE:", type(e).__name__)
+        print("HISTORY READ ERROR:", repr(e))
+        return []
+    finally:
+        conn.close()
+
+
+def get_analysis_analytics(user_email: str | None):
+    """Calculate account analytics from database history."""
+    history = get_analysis_history(user_email)
+    analytics = {
+        "happy": 0, "sad": 0, "angry": 0, "fear": 0, "neutral": 0,
+        "surprise": 0, "disgust": 0, "emotion_total": 0,
+        "smile_count": 0, "mask_count": 0, "total_analyses": len(history)
+    }
+    for item in history:
+        emotion = str(item.get("emotion") or "neutral").lower()
+        if emotion in analytics:
+            analytics[emotion] += 1
+        if item.get("smile") == "Smiling":
+            analytics["smile_count"] += 1
+        if item.get("mask") == "Mask":
+            analytics["mask_count"] += 1
+    analytics["emotion_total"] = sum(analytics[e] for e in ("happy", "sad", "angry", "fear", "neutral", "surprise", "disgust"))
+    return analytics
+
+
 def init_auth_db():
     conn = get_db()
 
@@ -1850,6 +2004,18 @@ def init_auth_db():
                     created_at TEXT NOT NULL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS analysis_history (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    age TEXT,
+                    smile TEXT,
+                    mask TEXT,
+                    emotion TEXT,
+                    image_path TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
 
         else:
             # ==========================================
@@ -1874,6 +2040,18 @@ def init_auth_db():
                     code_hash TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     used INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS analysis_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    age TEXT,
+                    smile TEXT,
+                    mask TEXT,
+                    emotion TEXT,
+                    image_path TEXT,
                     created_at TEXT NOT NULL
                 )
             """)
