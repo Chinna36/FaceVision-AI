@@ -1,4 +1,9 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+} from "react";
 
 /* ============================================================
    TYPES
@@ -84,7 +89,9 @@ const defaultSettings: Settings = {
    ============================================================ */
 
 const AuthContext =
-  createContext<AuthContextType | undefined>(undefined);
+  createContext<AuthContextType | undefined>(
+    undefined
+  );
 
 /* ============================================================
    PROVIDER
@@ -95,7 +102,8 @@ export function AuthProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] =
+    useState<User | null>(null);
 
   const [analytics, setAnalytics] =
     useState<Analytics>(defaultAnalytics);
@@ -122,61 +130,286 @@ export function AuthProvider({
   }, [settings.theme]);
 
   /* ==========================================================
-     LOAD USER SESSION
+     NORMALIZE ANALYTICS
      ========================================================== */
 
-  useEffect(() => {
-    try {
-      const storedUser =
-        localStorage.getItem("current_user");
+  const normalizeAnalytics = (
+    data: any
+  ): Analytics => {
+    return {
+      happy: Number(data?.happy || 0),
+      sad: Number(data?.sad || 0),
+      angry: Number(data?.angry || 0),
+      fear: Number(data?.fear || 0),
+      neutral: Number(data?.neutral || 0),
+    };
+  };
 
-      if (!storedUser) {
-        return;
+  /* ==========================================================
+     LOAD DATABASE HISTORY
+     ========================================================== */
+
+  const loadDatabaseHistory = async (
+    currentUser: User
+  ): Promise<boolean> => {
+    try {
+      const encodedEmail =
+        encodeURIComponent(
+          currentUser.email
+        );
+
+      /* ------------------------------------------------------
+         LOAD HISTORY
+         ------------------------------------------------------ */
+
+      const historyResponse =
+        await fetch(
+          `${BACKEND_URL}/analysis-history?user_email=${encodedEmail}`
+        );
+
+      if (!historyResponse.ok) {
+        throw new Error(
+          `History request failed: ${historyResponse.status}`
+        );
       }
 
-      const parsedUser: User =
-        JSON.parse(storedUser);
+      const historyData =
+        await historyResponse.json();
 
-      setUser(parsedUser);
+      /* ------------------------------------------------------
+         ACCEPT DIFFERENT BACKEND RESPONSE SHAPES
+         ------------------------------------------------------ */
 
-      const a = localStorage.getItem(
-        `analytics_${parsedUser.id}`
+      let history: any[] = [];
+
+      if (Array.isArray(historyData)) {
+        history = historyData;
+      } else if (
+        Array.isArray(historyData.history)
+      ) {
+        history = historyData.history;
+      } else if (
+        Array.isArray(historyData.results)
+      ) {
+        history = historyData.results;
+      }
+
+      /* ------------------------------------------------------
+         LOAD ANALYTICS
+         ------------------------------------------------------ */
+
+      const analyticsResponse =
+        await fetch(
+          `${BACKEND_URL}/analysis-analytics?user_email=${encodedEmail}`
+        );
+
+      if (!analyticsResponse.ok) {
+        throw new Error(
+          `Analytics request failed: ${analyticsResponse.status}`
+        );
+      }
+
+      const analyticsData =
+        await analyticsResponse.json();
+
+      let databaseAnalytics =
+        defaultAnalytics;
+
+      if (
+        analyticsData &&
+        analyticsData.analytics
+      ) {
+        databaseAnalytics =
+          normalizeAnalytics(
+            analyticsData.analytics
+          );
+      } else {
+        databaseAnalytics =
+          normalizeAnalytics(
+            analyticsData
+          );
+      }
+
+      /* ------------------------------------------------------
+         UPDATE REACT STATE
+         ------------------------------------------------------ */
+
+      setCapturedResults(history);
+
+      setAnalytics(
+        databaseAnalytics
       );
 
-      const r = localStorage.getItem(
-        `results_${parsedUser.id}`
+      /* ------------------------------------------------------
+         ALSO CACHE DATABASE DATA LOCALLY
+         ------------------------------------------------------ */
+
+      localStorage.setItem(
+        `analytics_${currentUser.id}`,
+        JSON.stringify(
+          databaseAnalytics
+        )
       );
 
-      const s = localStorage.getItem(
-        `settings_${parsedUser.id}`
+      localStorage.setItem(
+        `results_${currentUser.id}`,
+        JSON.stringify(history)
       );
+
+      console.log(
+        "Database history loaded:",
+        history.length
+      );
+
+      console.log(
+        "Database analytics loaded:",
+        databaseAnalytics
+      );
+
+      return true;
+    } catch (error) {
+      console.error(
+        "Could not load database analysis history:",
+        error
+      );
+
+      return false;
+    }
+  };
+
+  /* ==========================================================
+     LOAD LOCAL DATA
+     ========================================================== */
+
+  const loadLocalData = (
+    currentUser: User
+  ) => {
+    try {
+      const a =
+        localStorage.getItem(
+          `analytics_${currentUser.id}`
+        );
+
+      const r =
+        localStorage.getItem(
+          `results_${currentUser.id}`
+        );
+
+      const s =
+        localStorage.getItem(
+          `settings_${currentUser.id}`
+        );
 
       if (a) {
-        setAnalytics(JSON.parse(a));
+        setAnalytics(
+          normalizeAnalytics(
+            JSON.parse(a)
+          )
+        );
       } else {
-        setAnalytics(defaultAnalytics);
+        setAnalytics(
+          defaultAnalytics
+        );
       }
 
       if (r) {
-        setCapturedResults(JSON.parse(r));
+        const parsedResults =
+          JSON.parse(r);
+
+        setCapturedResults(
+          Array.isArray(
+            parsedResults
+          )
+            ? parsedResults
+            : []
+        );
       } else {
         setCapturedResults([]);
       }
 
       if (s) {
-        setSettings(JSON.parse(s));
+        setSettings(
+          JSON.parse(s)
+        );
       } else {
-        setSettings(defaultSettings);
+        setSettings(
+          defaultSettings
+        );
       }
     } catch (error) {
       console.error(
-        "Error loading saved session:",
+        "Error loading local data:",
         error
       );
 
-      localStorage.removeItem("current_user");
-      setUser(null);
+      setAnalytics(
+        defaultAnalytics
+      );
+
+      setCapturedResults([]);
+
+      setSettings(
+        defaultSettings
+      );
     }
+  };
+
+  /* ==========================================================
+     LOAD USER SESSION
+     ========================================================== */
+
+  useEffect(() => {
+    const restoreSession =
+      async () => {
+        try {
+          const storedUser =
+            localStorage.getItem(
+              "current_user"
+            );
+
+          if (!storedUser) {
+            return;
+          }
+
+          const parsedUser: User =
+            JSON.parse(
+              storedUser
+            );
+
+          setUser(parsedUser);
+
+          /* ----------------------------------------------
+             Load local data immediately.
+             This keeps the UI responsive.
+             ---------------------------------------------- */
+
+          loadLocalData(
+            parsedUser
+          );
+
+          /* ----------------------------------------------
+             Then load the database data.
+             Database becomes the source of truth.
+             ---------------------------------------------- */
+
+          await loadDatabaseHistory(
+            parsedUser
+          );
+        } catch (error) {
+          console.error(
+            "Error loading saved session:",
+            error
+          );
+
+          localStorage.removeItem(
+            "current_user"
+          );
+
+          setUser(null);
+        }
+      };
+
+    restoreSession();
   }, []);
 
   /* ==========================================================
@@ -184,111 +417,110 @@ export function AuthProvider({
      ========================================================== */
 
   const login = async (
-  email: string,
-  password: string
-): Promise<boolean> => {
-  try {
-    const response = await fetch(
-      `${BACKEND_URL}/login`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: email.trim().toLowerCase(),
-          password,
-        }),
-      }
-    );
-
-    let data: any = {};
-
+    email: string,
+    password: string
+  ): Promise<boolean> => {
     try {
-      data = await response.json();
-    } catch {
-      throw new Error(
-        `Server returned an invalid response (${response.status}).`
-      );
-    }
+      const response =
+        await fetch(
+          `${BACKEND_URL}/login`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              email: email
+                .trim()
+                .toLowerCase(),
+              password,
+            }),
+          }
+        );
 
-    if (!response.ok || !data.success) {
-      console.error(
-        "Login failed:",
-        response.status,
-        data
-      );
+      let data: any = {};
 
-      // Actual invalid credentials
-      if (response.status === 401) {
-        return false;
+      try {
+        data =
+          await response.json();
+      } catch {
+        throw new Error(
+          `Server returned an invalid response (${response.status}).`
+        );
       }
 
-      // Other backend errors should NOT look
-      // like an invalid password.
-      throw new Error(
-        data.detail ||
-        data.message ||
-        `Login failed with status ${response.status}.`
+      if (
+        !response.ok ||
+        !data.success
+      ) {
+        console.error(
+          "Login failed:",
+          response.status,
+          data
+        );
+
+        if (
+          response.status === 401
+        ) {
+          return false;
+        }
+
+        throw new Error(
+          data.detail ||
+            data.message ||
+            `Login failed with status ${response.status}.`
+        );
+      }
+
+      const loggedInUser: User =
+        data.user;
+
+      if (!loggedInUser) {
+        throw new Error(
+          "Server login response did not contain a user."
+        );
+      }
+
+      /* ------------------------------------------------------
+         SET USER
+         ------------------------------------------------------ */
+
+      setUser(loggedInUser);
+
+      localStorage.setItem(
+        "current_user",
+        JSON.stringify(
+          loggedInUser
+        )
       );
-    }
 
-    const loggedInUser: User = data.user;
+      /* ------------------------------------------------------
+         LOAD LOCAL DATA FIRST
+         ------------------------------------------------------ */
 
-    if (!loggedInUser) {
-      throw new Error(
-        "Server login response did not contain a user."
+      loadLocalData(
+        loggedInUser
       );
+
+      /* ------------------------------------------------------
+         THEN LOAD DATABASE DATA
+         ------------------------------------------------------ */
+
+      await loadDatabaseHistory(
+        loggedInUser
+      );
+
+      return true;
+    } catch (error) {
+      console.error(
+        "Login request error:",
+        error
+      );
+
+      throw error;
     }
-
-    setUser(loggedInUser);
-
-    localStorage.setItem(
-      "current_user",
-      JSON.stringify(loggedInUser)
-    );
-
-    const a = localStorage.getItem(
-      `analytics_${loggedInUser.id}`
-    );
-
-    const r = localStorage.getItem(
-      `results_${loggedInUser.id}`
-    );
-
-    const s = localStorage.getItem(
-      `settings_${loggedInUser.id}`
-    );
-
-    setAnalytics(
-      a
-        ? JSON.parse(a)
-        : defaultAnalytics
-    );
-
-    setCapturedResults(
-      r
-        ? JSON.parse(r)
-        : []
-    );
-
-    setSettings(
-      s
-        ? JSON.parse(s)
-        : defaultSettings
-    );
-
-    return true;
-
-  } catch (error) {
-    console.error(
-      "Login request error:",
-      error
-    );
-
-    throw error;
-  }
-};
+  };
 
   /* ==========================================================
      REGISTER
@@ -301,25 +533,31 @@ export function AuthProvider({
     guardianEmail?: string
   ): Promise<boolean> => {
     try {
-      const response = await fetch(
-        `${BACKEND_URL}/register`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            fullName,
-            email,
-            password,
-            guardianEmail,
-          }),
-        }
-      );
+      const response =
+        await fetch(
+          `${BACKEND_URL}/register`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              fullName,
+              email,
+              password,
+              guardianEmail,
+            }),
+          }
+        );
 
-      const data = await response.json();
+      const data =
+        await response.json();
 
-      if (!response.ok || !data.success) {
+      if (
+        !response.ok ||
+        !data.success
+      ) {
         console.error(
           "Registration failed:",
           data
@@ -331,18 +569,53 @@ export function AuthProvider({
       const registeredUser: User =
         data.user;
 
-      setUser(registeredUser);
+      setUser(
+        registeredUser
+      );
 
       localStorage.setItem(
         "current_user",
-        JSON.stringify(registeredUser)
+        JSON.stringify(
+          registeredUser
+        )
       );
 
-      setAnalytics(defaultAnalytics);
+      setAnalytics(
+        defaultAnalytics
+      );
 
       setCapturedResults([]);
 
-      setSettings(defaultSettings);
+      setSettings(
+        defaultSettings
+      );
+
+      localStorage.setItem(
+        `analytics_${registeredUser.id}`,
+        JSON.stringify(
+          defaultAnalytics
+        )
+      );
+
+      localStorage.setItem(
+        `results_${registeredUser.id}`,
+        JSON.stringify([])
+      );
+
+      localStorage.setItem(
+        `settings_${registeredUser.id}`,
+        JSON.stringify(
+          defaultSettings
+        )
+      );
+
+      /* ------------------------------------------------------
+         New account should have empty database history.
+         ------------------------------------------------------ */
+
+      await loadDatabaseHistory(
+        registeredUser
+      );
 
       return true;
     } catch (error) {
@@ -363,27 +636,37 @@ export function AuthProvider({
     if (user) {
       localStorage.setItem(
         `analytics_${user.id}`,
-        JSON.stringify(analytics)
+        JSON.stringify(
+          analytics
+        )
       );
 
       localStorage.setItem(
         `results_${user.id}`,
-        JSON.stringify(capturedResults)
+        JSON.stringify(
+          capturedResults
+        )
       );
 
       localStorage.setItem(
         `settings_${user.id}`,
-        JSON.stringify(settings)
+        JSON.stringify(
+          settings
+        )
       );
     }
 
     setUser(null);
 
-    setAnalytics(defaultAnalytics);
+    setAnalytics(
+      defaultAnalytics
+    );
 
     setCapturedResults([]);
 
-    setSettings(defaultSettings);
+    setSettings(
+      defaultSettings
+    );
 
     localStorage.removeItem(
       "current_user"
@@ -401,9 +684,11 @@ export function AuthProvider({
       return;
     }
 
-    const emotion: Emotion =
-      (result.emotion || "neutral")
-        .toLowerCase();
+    const emotion =
+      String(
+        result?.emotion ||
+          "neutral"
+      ).toLowerCase();
 
     const validEmotion: Emotion =
       [
@@ -413,23 +698,41 @@ export function AuthProvider({
         "fear",
         "neutral",
       ].includes(emotion)
-        ? emotion
+        ? (emotion as Emotion)
         : "neutral";
 
-    const updatedAnalytics = {
-      ...analytics,
-      [validEmotion]:
-        (analytics[validEmotion] || 0) + 1,
+    /* ------------------------------------------------------
+       UPDATE ANALYTICS IMMEDIATELY
+       ------------------------------------------------------ */
+
+    const updatedAnalytics: Analytics =
+      {
+        ...analytics,
+        [validEmotion]:
+          (analytics[
+            validEmotion
+          ] || 0) + 1,
+      };
+
+    /* ------------------------------------------------------
+       CREATE RESULT
+       ------------------------------------------------------ */
+
+    const newResult = {
+      ...result,
+      timestamp:
+        result?.timestamp ||
+        new Date().toISOString(),
     };
 
     const updatedResults = [
-      {
-        ...result,
-        timestamp:
-          new Date().toISOString(),
-      },
+      newResult,
       ...capturedResults,
     ];
+
+    /* ------------------------------------------------------
+       UPDATE UI
+       ------------------------------------------------------ */
 
     setAnalytics(
       updatedAnalytics
@@ -438,6 +741,10 @@ export function AuthProvider({
     setCapturedResults(
       updatedResults
     );
+
+    /* ------------------------------------------------------
+       CACHE LOCALLY
+       ------------------------------------------------------ */
 
     localStorage.setItem(
       `analytics_${user.id}`,
@@ -452,6 +759,20 @@ export function AuthProvider({
         updatedResults
       )
     );
+
+    console.log(
+      "Analysis result added to UI:",
+      newResult
+    );
+
+    /*
+      IMPORTANT:
+      The backend /analyze endpoint already saves
+      the analysis into analysis_history.
+
+      Therefore we DO NOT POST the result again here,
+      otherwise every analysis could be duplicated.
+    */
   };
 
   /* ==========================================================
@@ -464,9 +785,10 @@ export function AuthProvider({
         ? "light"
         : "dark";
 
-    const updatedSettings = {
-      theme: newTheme,
-    };
+    const updatedSettings: Settings =
+      {
+        theme: newTheme,
+      };
 
     setSettings(
       updatedSettings
@@ -493,6 +815,7 @@ export function AuthProvider({
         analytics,
         settings,
         capturedResults,
+
         isAuthenticated:
           !!user,
 
