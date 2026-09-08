@@ -949,7 +949,7 @@ def detect_emotion(face):
         result = DEEPFACE_MODULE.analyze(
             img_path=emotion_face,
             actions=["emotion"],
-            models={"emotion": DEEPFACE_EMOTION_MODEL},
+            # models={"emotion": DEEPFACE_EMOTION_MODEL},
             enforce_detection=False,
             detector_backend="skip",
             align=False,
