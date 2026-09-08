@@ -16,6 +16,7 @@ import datetime
 import smtplib
 import shutil
 import tempfile
+import threading
 import numpy as np
 
 from pathlib import Path
@@ -41,6 +42,17 @@ ENABLE_DEEPFACE = os.getenv("ENABLE_DEEPFACE", "false").lower() == "true"
 # Mask detection is optional so Render can prioritize emotion recognition.
 # Keep the mask model/code in the project, but disable loading on Render with ENABLE_MASK=false.
 ENABLE_MASK = os.getenv("ENABLE_MASK", "true").lower() == "true"
+
+# ------------------------------------------------------------
+# DEEPFACE SINGLETON
+# ------------------------------------------------------------
+# DeepFace is loaded once per running Python process and then
+# reused for every /analyze request. A lock prevents two
+# simultaneous requests from trying to initialize the model.
+DEEPFACE_MODULE = None
+DEEPFACE_EMOTION_MODEL = None
+DEEPFACE_READY = False
+DEEPFACE_LOCK = threading.Lock()
 
 # ------------------------------------------------------------
 # FASTAPI APP
@@ -838,157 +850,130 @@ AGE_LIST = [
 
 
 # ------------------------------------------------------------
-# EMOTION DETECTION
+# DEEPFACE INITIALIZATION
 # ------------------------------------------------------------
 
-# ------------------------------------------------------------
-# EMOTION DETECTION
-# ------------------------------------------------------------
+def load_deepface_once():
+
+    global DEEPFACE_MODULE
+    global DEEPFACE_EMOTION_MODEL
+    global DEEPFACE_READY
+
+    if not ENABLE_DEEPFACE:
+        return False
+
+    if DEEPFACE_READY and DEEPFACE_MODULE is not None and DEEPFACE_EMOTION_MODEL is not None:
+        return True
+
+    with DEEPFACE_LOCK:
+
+        if DEEPFACE_READY and DEEPFACE_MODULE is not None and DEEPFACE_EMOTION_MODEL is not None:
+            return True
+
+        print("============================================================")
+        print("LOADING DEEPFACE EMOTION MODEL ONCE")
+        print("============================================================")
+
+        try:
+            from deepface import DeepFace
+
+            print("DeepFace imported successfully.")
+            print("Building Emotion model once...")
+
+            # Build only the emotion model. This causes DeepFace to
+            # download the emotion weights if they are not already
+            # present in its cache. After this, the same model object
+            # is reused for every request handled by this process.
+            emotion_model = DeepFace.build_model(
+                task="facial_attribute",
+                model_name="Emotion"
+            )
+
+            DEEPFACE_MODULE = DeepFace
+            DEEPFACE_EMOTION_MODEL = emotion_model
+            DEEPFACE_READY = True
+
+            print("DeepFace Emotion model loaded successfully ONCE.")
+            print("All emotion requests will reuse this model.")
+            print("============================================================")
+
+            return True
+
+        except Exception as e:
+            DEEPFACE_MODULE = None
+            DEEPFACE_EMOTION_MODEL = None
+            DEEPFACE_READY = False
+
+            print("DEEPFACE STARTUP/LOAD ERROR:")
+            print("ERROR TYPE:", type(e).__name__)
+            print("ERROR:", repr(e))
+
+            return False
+
 
 def detect_emotion(face):
 
     print("STEP 5: Emotion detection...")
 
-    # --------------------------------------------------------
-    # Emotion detection disabled
-    # --------------------------------------------------------
-
     if not ENABLE_DEEPFACE:
-
-        print(
-            "DeepFace disabled. Returning neutral emotion."
-        )
-
+        print("DeepFace disabled. Returning neutral emotion.")
         return "neutral"
 
     # --------------------------------------------------------
-    # Lazy DeepFace import
+    # DeepFace is initialized once for this Python process.
     # --------------------------------------------------------
+    if not DEEPFACE_READY:
+        print("DeepFace model is not ready. Attempting one-time load...")
+        if not load_deepface_once():
+            return "neutral"
 
     try:
 
-        print("Loading DeepFace on demand...")
-
-        from deepface import DeepFace
-
-        print(
-            "DeepFace imported successfully."
-        )
-
-        # ----------------------------------------------------
-        # Validate face image
-        # ----------------------------------------------------
-
         if face is None:
-
-            print(
-                "EMOTION ERROR: Face image is None."
-            )
-
+            print("EMOTION ERROR: Face image is None.")
             return "neutral"
 
         if not isinstance(face, np.ndarray):
-
-            print(
-                "EMOTION ERROR: Face is not a NumPy image."
-            )
-
+            print("EMOTION ERROR: Face is not a NumPy image.")
             return "neutral"
 
         if face.size == 0:
-
-            print(
-                "EMOTION ERROR: Face image is empty."
-            )
-
+            print("EMOTION ERROR: Face image is empty.")
             return "neutral"
-
-        # ----------------------------------------------------
-        # Prepare face for DeepFace
-        #
-        # The face has already been detected by our
-        # OpenCV face detector, so DeepFace does not
-        # need to detect the face again.
-        # ----------------------------------------------------
 
         emotion_face = face.copy()
 
-        print(
-            "Emotion face size:",
-            emotion_face.shape
-        )
+        print("Emotion face size:", emotion_face.shape)
+        print("Using already-loaded DeepFace Emotion model.")
 
-        # ----------------------------------------------------
-        # Run emotion analysis
-        # ----------------------------------------------------
-
-        result = DeepFace.analyze(
-
+        result = DEEPFACE_MODULE.analyze(
             img_path=emotion_face,
-
             actions=["emotion"],
-
+            models={"emotion": DEEPFACE_EMOTION_MODEL},
             enforce_detection=False,
-
             detector_backend="skip",
-
             align=False,
-
             silent=True
-
         )
 
-        print(
-            "DeepFace raw result:",
-            result
-        )
-
-        # ----------------------------------------------------
-        # Extract result
-        # ----------------------------------------------------
+        print("DeepFace raw result:", result)
 
         if isinstance(result, list):
-
             if len(result) == 0:
-
                 emotion = "neutral"
-
             else:
-
-                emotion = result[0].get(
-                    "dominant_emotion",
-                    "neutral"
-                )
-
+                emotion = result[0].get("dominant_emotion", "neutral")
         elif isinstance(result, dict):
-
-            emotion = result.get(
-                "dominant_emotion",
-                "neutral"
-            )
-
+            emotion = result.get("dominant_emotion", "neutral")
         else:
-
             emotion = "neutral"
-
-        # ----------------------------------------------------
-        # Normalize emotion
-        # ----------------------------------------------------
 
         if not emotion:
-
             emotion = "neutral"
 
-        emotion = str(
-            emotion
-        ).strip().lower()
-
-        # ----------------------------------------------------
-        # Only allow supported emotions
-        # ----------------------------------------------------
+        emotion = str(emotion).strip().lower()
 
         allowed_emotions = {
-
             "happy",
             "sad",
             "angry",
@@ -996,46 +981,46 @@ def detect_emotion(face):
             "surprise",
             "disgust",
             "neutral"
-
         }
 
         if emotion not in allowed_emotions:
-
-            print(
-                "Unknown emotion returned:",
-                emotion
-            )
-
+            print("Unknown emotion returned:", emotion)
             emotion = "neutral"
 
-        print(
-            "EMOTION:",
-            emotion
-        )
-
+        print("EMOTION:", emotion)
         return emotion
 
     except Exception as e:
-
-        print(
-            "DEEPFACE ERROR:"
-        )
-
-        print(
-            "ERROR TYPE:",
-            type(e).__name__
-        )
-
-        print(
-            "ERROR:",
-            repr(e)
-        )
-
-        # ----------------------------------------------------
-        # Emotion failure must NOT break the other AI models.
-        # ----------------------------------------------------
-
+        print("DEEPFACE ERROR:")
+        print("ERROR TYPE:", type(e).__name__)
+        print("ERROR:", repr(e))
         return "neutral"
+
+
+# ------------------------------------------------------------
+# LOAD DEEPFACE ON APPLICATION STARTUP
+# ------------------------------------------------------------
+# This is intentionally after the function definitions so the
+# function is available when FastAPI fires the startup event.
+
+@app.on_event("startup")
+async def load_models_on_startup():
+
+    if not ENABLE_DEEPFACE:
+        print("DeepFace startup loading skipped because ENABLE_DEEPFACE=false")
+        return
+
+    print("============================================================")
+    print("APPLICATION STARTUP: PRELOADING DEEPFACE")
+    print("============================================================")
+
+    loaded = load_deepface_once()
+
+    if loaded:
+        print("STARTUP: DeepFace Emotion model is READY.")
+    else:
+        print("STARTUP: DeepFace could not be loaded.")
+        print("Emotion requests will return neutral until loading succeeds.")
 
 
 # ------------------------------------------------------------
